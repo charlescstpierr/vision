@@ -4,6 +4,7 @@ import type { Socket } from 'node:net';
 import { WebSocketServer, type WebSocket } from 'ws';
 import type { AgentKind, AgentRunner, ClientMessage, ServerMessage } from '@vizion/shared';
 import { createRunners, detectAvailableAgents } from './runners/index.js';
+import { computeDiff, restoreSnapshot, takeSnapshot, type Snapshot } from './snapshot.js';
 
 const require = createRequire(import.meta.url);
 const pkg = require('../package.json') as { name: string; version: string };
@@ -75,6 +76,11 @@ export function createServer(options: CreateServerOptions): VizionServer {
   // is rejected and so closing the socket aborts the agent process.
   const activeRuns = new WeakMap<WebSocket, AbortController>();
 
+  // The snapshot taken before the most recent run on a connection, plus the
+  // paths from the diff it produced (what `reject` should restore). Cleared
+  // on `accept`, `reject`, or socket close.
+  const pendingSnapshots = new Map<WebSocket, { snapshot: Snapshot; touchedPaths: string[] }>();
+
   httpServer.on('upgrade', (req: IncomingMessage, socket: Socket, head: Buffer) => {
     if (req.url !== '/ws' || !isAllowedOrigin(req.headers.origin, allowedOriginPrefixes)) {
       socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
@@ -115,8 +121,27 @@ export function createServer(options: CreateServerOptions): VizionServer {
         pageUrl: message.element.pageUrl,
         cwd,
       };
-      for await (const event of runner.run(request, controller.signal)) {
-        send(ws, { type: 'event', event });
+
+      const snapshot = await takeSnapshot(cwd);
+      pendingSnapshots.set(ws, { snapshot, touchedPaths: [] });
+
+      try {
+        for await (const event of runner.run(request, controller.signal)) {
+          send(ws, { type: 'event', event });
+        }
+      } finally {
+        // Diff after the run finishes, whether it completed, errored, or was aborted.
+        try {
+          const files = await computeDiff(cwd, snapshot);
+          const pending = pendingSnapshots.get(ws);
+          if (pending) pending.touchedPaths = files.map((file) => file.path);
+          send(ws, { type: 'diff', files });
+        } catch (diffErr) {
+          send(ws, {
+            type: 'error',
+            message: diffErr instanceof Error ? diffErr.message : 'failed to compute diff',
+          });
+        }
       }
     } catch (err) {
       send(ws, { type: 'error', message: err instanceof Error ? err.message : 'agent run failed' });
@@ -131,10 +156,26 @@ export function createServer(options: CreateServerOptions): VizionServer {
         case 'ping':
           send(ws, { type: 'pong' });
           return;
-        case 'accept':
-        case 'reject':
-          send(ws, { type: 'error', message: 'not implemented yet' });
+        case 'accept': {
+          if (!pendingSnapshots.delete(ws)) {
+            send(ws, { type: 'error', message: 'nothing to accept/reject' });
+            return;
+          }
+          send(ws, { type: 'diff', files: [] });
           return;
+        }
+        case 'reject': {
+          const pending = pendingSnapshots.get(ws);
+          if (!pending) {
+            send(ws, { type: 'error', message: 'nothing to accept/reject' });
+            return;
+          }
+          pendingSnapshots.delete(ws);
+          const restored = await restoreSnapshot(cwd, pending.snapshot, pending.touchedPaths);
+          send(ws, { type: 'restored', files: restored });
+          send(ws, { type: 'diff', files: [] });
+          return;
+        }
         case 'run':
           await handleRun(ws, message);
           return;
@@ -163,6 +204,7 @@ export function createServer(options: CreateServerOptions): VizionServer {
     ws.on('close', () => {
       activeRuns.get(ws)?.abort();
       activeRuns.delete(ws);
+      pendingSnapshots.delete(ws);
     });
   });
 

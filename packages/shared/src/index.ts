@@ -41,5 +41,6 @@ export type ServerMessage =
   | { type: 'hello'; version: string; cwd: string; agents: AgentKind[] }
   | { type: 'event'; event: AgentEvent }
   | { type: 'diff'; files: FileDiff[] }
+  | { type: 'restored'; files: string[] }
   | { type: 'pong' }
   | { type: 'error'; message: string };

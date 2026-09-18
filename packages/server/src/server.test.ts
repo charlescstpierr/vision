@@ -1,7 +1,14 @@
+import { execFile } from 'node:child_process';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { promisify } from 'node:util';
 import { describe, expect, it } from 'vitest';
 import { WebSocket } from 'ws';
 import type { AgentEvent, AgentRunner, ServerMessage } from '@vizion/shared';
 import { createServer } from './server.js';
+
+const execFileAsync = promisify(execFile);
 
 describe('server', () => {
   it('serves /health with the expected shape', async () => {
@@ -117,8 +124,11 @@ describe('server websocket', () => {
 
       ws.send(JSON.stringify({ type: 'run', agent: 'claude', prompt: 'make it blue', element }));
 
+      // 4 agent events, then the post-run diff (empty: the FakeRunner never
+      // touches any file). Drained fully so the run's slot is freed before
+      // the next `run` is sent (its diffing does a few real `git` spawns).
       const received: ServerMessage[] = [];
-      while (received.length < 4) {
+      while (received.length < 5) {
         received.push(await reader.next());
       }
       expect(received).toEqual([
@@ -126,6 +136,7 @@ describe('server websocket', () => {
         { type: 'event', event: { type: 'text', text: 'hello' } },
         { type: 'event', event: { type: 'text', text: 'world' } },
         { type: 'event', event: { type: 'done', exitCode: 0 } },
+        { type: 'diff', files: [] },
       ]);
 
       // Sending a second `run` before the first has finished must be
@@ -133,8 +144,8 @@ describe('server websocket', () => {
       ws.send(JSON.stringify({ type: 'run', agent: 'claude', prompt: 'p1', element }));
       ws.send(JSON.stringify({ type: 'run', agent: 'claude', prompt: 'p2', element }));
       const results: ServerMessage[] = [];
-      // Drain remaining messages for this exchange (4 events + 1 error, in some order).
-      while (results.length < 5) {
+      // Drain remaining messages for this exchange (4 events + 1 diff + 1 error, in some order).
+      while (results.length < 6) {
         results.push(await reader.next());
       }
       const errorMessages = results.filter((m) => m.type === 'error');
@@ -156,6 +167,93 @@ describe('server websocket', () => {
       expect(badResult).toBe('error');
     } finally {
       await server.stop();
+    }
+  });
+});
+
+class FileWritingRunner implements AgentRunner {
+  readonly kind = 'claude' as const;
+  constructor(private readonly cwd: string) {}
+
+  isAvailable(): Promise<boolean> {
+    return Promise.resolve(true);
+  }
+
+  async *run(): AsyncIterable<AgentEvent> {
+    yield { type: 'started', agent: 'claude' };
+    await fs.writeFile(path.join(this.cwd, 'touched.txt'), 'agent wrote this\n');
+    yield { type: 'done', exitCode: 0 };
+  }
+}
+
+describe('server diff / accept / reject', () => {
+  it('sends a diff after a run and restores touched files on reject', async () => {
+    const cwd = await fs.mkdtemp(path.join(os.tmpdir(), 'vizion-server-test-'));
+    await execFileAsync('git', ['init', '-q'], { cwd });
+    await execFileAsync(
+      'git',
+      ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '--allow-empty', '-q', '-m', 'init'],
+      { cwd },
+    );
+
+    const server = createServer({
+      port: 0,
+      cwd,
+      runners: [new FileWritingRunner(cwd)],
+      allowedOriginPrefixes: ['http://test'],
+    });
+    await server.start();
+
+    try {
+      const port = server.port;
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`, { headers: { Origin: 'http://test' } });
+      const reader = createMessageReader(ws);
+      await new Promise<void>((resolve, reject) => {
+        ws.once('open', () => resolve());
+        ws.once('error', reject);
+      });
+      await reader.next(); // hello
+
+      const element = {
+        selector: '#btn',
+        tagName: 'button',
+        classes: [],
+        textContent: 'Go',
+        outerHtml: '<button id="btn">Go</button>',
+        domPath: ['html', 'body', '#btn'],
+        rect: { x: 0, y: 0, width: 10, height: 10 },
+        computedStyles: {},
+        pageUrl: 'https://example.com',
+      };
+
+      ws.send(JSON.stringify({ type: 'run', agent: 'claude', prompt: 'do it', element }));
+
+      const events: ServerMessage[] = [];
+      while (events.length < 3) {
+        events.push(await reader.next());
+      }
+      expect(events[0]).toEqual({ type: 'event', event: { type: 'started', agent: 'claude' } });
+      expect(events[1]).toEqual({ type: 'event', event: { type: 'done', exitCode: 0 } });
+      const diffMessage = events[2];
+      if (diffMessage?.type !== 'diff') throw new Error('expected diff message');
+      expect(diffMessage.files).toHaveLength(1);
+      expect(diffMessage.files[0]).toMatchObject({ path: 'touched.txt', status: 'added' });
+
+      ws.send(JSON.stringify({ type: 'reject' }));
+      const restoredMessage = await reader.next();
+      expect(restoredMessage).toEqual({ type: 'restored', files: ['touched.txt'] });
+      const afterReject = await reader.next();
+      expect(afterReject).toEqual({ type: 'diff', files: [] });
+      await expect(fs.readFile(path.join(cwd, 'touched.txt'))).rejects.toThrow();
+
+      ws.send(JSON.stringify({ type: 'reject' }));
+      const secondReject = await reader.next();
+      expect(secondReject).toEqual({ type: 'error', message: 'nothing to accept/reject' });
+
+      ws.close();
+    } finally {
+      await server.stop();
+      await fs.rm(cwd, { recursive: true, force: true });
     }
   });
 });
