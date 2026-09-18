@@ -16,6 +16,7 @@ describe('runReducer', () => {
       diff: null,
       error: null,
       exitCode: null,
+      restoredFiles: null,
     });
   });
 
@@ -55,6 +56,19 @@ describe('runReducer', () => {
     const files: FileDiff[] = [{ path: 'a.ts', status: 'modified', patch: '@@ -1 +1 @@' }];
     state = runReducer(state, { type: 'server', message: { type: 'diff', files } });
     expect(state.diff).toEqual(files);
+  });
+
+  it('restored message records the restored file list', () => {
+    let state = start();
+    state = runReducer(state, { type: 'server', message: { type: 'restored', files: ['a.ts', 'b.ts'] } });
+    expect(state.restoredFiles).toEqual(['a.ts', 'b.ts']);
+  });
+
+  it('start resets restoredFiles from a previous reject', () => {
+    let state = start();
+    state = runReducer(state, { type: 'server', message: { type: 'restored', files: ['a.ts'] } });
+    state = runReducer(state, { type: 'start', agent: 'codex', prompt: 'again' });
+    expect(state.restoredFiles).toBeNull();
   });
 
   it('hello and pong messages are no-ops', () => {

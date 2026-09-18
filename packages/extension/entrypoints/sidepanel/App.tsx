@@ -4,7 +4,9 @@ import ElementCard from './components/ElementCard.js';
 import RunPanel from './components/RunPanel.js';
 import AgentOutput from './components/AgentOutput.js';
 import DiffView from './components/DiffView.js';
+import OverridePanel from './components/OverridePanel.js';
 import { useVizionServer } from './hooks/useVizionServer.js';
+import { useActiveTab } from './hooks/useActiveTab.js';
 import { initialRunState, runReducer } from './state/runState.js';
 
 async function sendToActiveTab(message: PanelToContentMessage): Promise<unknown> {
@@ -15,6 +17,7 @@ async function sendToActiveTab(message: PanelToContentMessage): Promise<unknown>
 
 export default function App() {
   const server = useVizionServer();
+  const tabUrl = useActiveTab();
   const [selectMode, setSelectMode] = useState(false);
   const [element, setElement] = useState<ElementContext | undefined>(undefined);
   const [notice, setNotice] = useState<string | undefined>(undefined);
@@ -73,6 +76,8 @@ export default function App() {
 
       {element && <ElementCard element={element} onClear={() => setElement(undefined)} />}
 
+      <OverridePanel element={element} tabUrl={tabUrl} />
+
       <RunPanel
         agents={server.hello?.agents ?? []}
         connected={connected}
@@ -87,6 +92,7 @@ export default function App() {
         <DiffView
           files={run.diff}
           error={run.error}
+          restoredFiles={run.restoredFiles}
           onAccept={() => server.send({ type: 'accept' })}
           onReject={() => server.send({ type: 'reject' })}
         />

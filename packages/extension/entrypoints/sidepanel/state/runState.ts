@@ -7,6 +7,7 @@ export interface RunState {
   diff: FileDiff[] | null;
   error: string | null;
   exitCode: number | null;
+  restoredFiles: string[] | null;
 }
 
 export type RunAction =
@@ -21,6 +22,7 @@ export const initialRunState: RunState = {
   diff: null,
   error: null,
   exitCode: null,
+  restoredFiles: null,
 };
 
 export function runReducer(state: RunState, action: RunAction): RunState {
@@ -33,6 +35,7 @@ export function runReducer(state: RunState, action: RunAction): RunState {
         diff: null,
         error: null,
         exitCode: null,
+        restoredFiles: null,
       };
     case 'clear':
       return initialRunState;
@@ -52,6 +55,8 @@ export function runReducer(state: RunState, action: RunAction): RunState {
         }
         case 'diff':
           return { ...state, diff: message.files };
+        case 'restored':
+          return { ...state, restoredFiles: message.files };
         case 'error':
           return { ...state, running: false, error: message.message };
         case 'hello':

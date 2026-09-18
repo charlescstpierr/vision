@@ -5,7 +5,7 @@ export default defineConfig({
   manifest: {
     name: 'Vizion',
     description: 'Edit live websites with a coding agent',
-    permissions: ['sidePanel', 'activeTab', 'storage', 'scripting'],
+    permissions: ['sidePanel', 'activeTab', 'storage', 'scripting', 'tabs'],
     host_permissions: ['http://localhost/*', 'http://127.0.0.1/*'],
     action: {
       default_title: 'Vizion',
