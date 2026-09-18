@@ -1,12 +1,14 @@
-import { useEffect, useReducer, useState } from 'react';
+import { useEffect, useReducer, useRef, useState } from 'react';
 import type { AgentKind, ContentToPanelMessage, ElementContext, PanelToContentMessage } from '@vizion/shared';
 import ElementCard from './components/ElementCard.js';
 import RunPanel from './components/RunPanel.js';
 import AgentOutput from './components/AgentOutput.js';
 import DiffView from './components/DiffView.js';
 import OverridePanel from './components/OverridePanel.js';
+import QuickStyles from './components/QuickStyles.js';
 import { useVizionServer } from './hooks/useVizionServer.js';
 import { useActiveTab } from './hooks/useActiveTab.js';
+import { useApplyChange } from './hooks/useApplyChange.js';
 import { initialRunState, runReducer } from './state/runState.js';
 
 async function sendToActiveTab(message: PanelToContentMessage): Promise<unknown> {
@@ -22,8 +24,20 @@ export default function App() {
   const [element, setElement] = useState<ElementContext | undefined>(undefined);
   const [notice, setNotice] = useState<string | undefined>(undefined);
   const [run, dispatch] = useReducer(runReducer, initialRunState);
+  const [prompt, setPrompt] = useState('');
+  const promptRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => server.subscribe((message) => dispatch({ type: 'server', message })), [server]);
+
+  const connected = server.status === 'connected';
+
+  const { applyStyleChanges, applyTextEdit } = useApplyChange({
+    connected,
+    tabUrl,
+    prompt,
+    setPrompt,
+    focusPrompt: () => promptRef.current?.focus(),
+  });
 
   useEffect(() => {
     const listener = (message: ContentToPanelMessage) => {
@@ -32,11 +46,15 @@ export default function App() {
         setSelectMode(false);
       } else if (message.type === 'vizion:select-mode-changed') {
         setSelectMode(message.enabled);
+      } else if (message.type === 'vizion:text-edited') {
+        if (message.committed) {
+          applyTextEdit(message.selector, message.before, message.after);
+        }
       }
     };
     chrome.runtime.onMessage.addListener(listener);
     return () => chrome.runtime.onMessage.removeListener(listener);
-  }, []);
+  }, [applyTextEdit]);
 
   const toggleSelectMode = async () => {
     const next = !selectMode;
@@ -49,13 +67,18 @@ export default function App() {
     }
   };
 
-  const runAgent = (agent: AgentKind, prompt: string) => {
+  const runAgent = (agent: AgentKind, promptText: string) => {
     if (!element) return;
-    dispatch({ type: 'start', agent, prompt });
-    server.send({ type: 'run', agent, prompt, element });
+    dispatch({ type: 'start', agent, prompt: promptText });
+    server.send({ type: 'run', agent, prompt: promptText, element });
   };
 
-  const connected = server.status === 'connected';
+  const editText = () => {
+    if (!element) return;
+    void sendToActiveTab({ type: 'vizion:edit-text', selector: element.selector }).catch(() => {
+      setNotice('Reload the page to enable Vizion on it.');
+    });
+  };
 
   return (
     <div style={{ fontFamily: 'system-ui, sans-serif', padding: 16 }}>
@@ -74,7 +97,11 @@ export default function App() {
 
       {notice && <p style={{ color: '#a83232', fontSize: 12, marginTop: 8 }}>{notice}</p>}
 
-      {element && <ElementCard element={element} onClear={() => setElement(undefined)} />}
+      {element && (
+        <ElementCard element={element} onClear={() => setElement(undefined)} onEditText={editText} />
+      )}
+
+      {element && <QuickStyles element={element} onApply={(changes) => applyStyleChanges(element, changes)} />}
 
       <OverridePanel element={element} tabUrl={tabUrl} />
 
@@ -83,6 +110,9 @@ export default function App() {
         connected={connected}
         elementSelected={!!element}
         running={run.running}
+        prompt={prompt}
+        setPrompt={setPrompt}
+        promptRef={promptRef}
         onRun={runAgent}
       />
 

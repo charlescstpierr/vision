@@ -4,6 +4,7 @@ import type { ElementContext } from '@vizion/shared';
 type Props = {
   element: ElementContext;
   onClear: () => void;
+  onEditText: () => void;
 };
 
 const cardStyle: CSSProperties = {
@@ -30,7 +31,7 @@ const monoStyle: CSSProperties = {
   wordBreak: 'break-all',
 };
 
-export default function ElementCard({ element, onClear }: Props) {
+export default function ElementCard({ element, onClear, onEditText }: Props) {
   const width = Math.round(element.rect.width);
   const height = Math.round(element.rect.height);
 
@@ -46,6 +47,10 @@ export default function ElementCard({ element, onClear }: Props) {
       <p style={{ ...monoStyle, marginTop: 8 }}>
         &lt;{element.tagName}&gt; {element.selector}
       </p>
+
+      <button onClick={onEditText} style={{ fontSize: 12, marginTop: 4 }}>
+        Edit text
+      </button>
 
       {element.classes.length > 0 && (
         <div style={{ marginTop: 4 }}>

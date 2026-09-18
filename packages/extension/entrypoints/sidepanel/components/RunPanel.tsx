@@ -1,4 +1,4 @@
-import { useState, type CSSProperties, type KeyboardEvent } from 'react';
+import { useState, type CSSProperties, type KeyboardEvent, type RefObject } from 'react';
 import type { AgentKind } from '@vizion/shared';
 
 type Props = {
@@ -6,6 +6,9 @@ type Props = {
   connected: boolean;
   elementSelected: boolean;
   running: boolean;
+  prompt: string;
+  setPrompt: (next: string) => void;
+  promptRef?: RefObject<HTMLTextAreaElement>;
   onRun: (agent: AgentKind, prompt: string) => void;
 };
 
@@ -17,9 +20,17 @@ const fieldStyle: CSSProperties = {
   fontSize: 13,
 };
 
-export default function RunPanel({ agents, connected, elementSelected, running, onRun }: Props) {
+export default function RunPanel({
+  agents,
+  connected,
+  elementSelected,
+  running,
+  prompt,
+  setPrompt,
+  promptRef,
+  onRun,
+}: Props) {
   const [agent, setAgent] = useState<AgentKind | ''>(agents[0] ?? '');
-  const [prompt, setPrompt] = useState('');
 
   const hasAgents = agents.length > 0;
   const canSend = connected && elementSelected && agent !== '' && prompt.trim().length > 0 && !running;
@@ -63,6 +74,7 @@ export default function RunPanel({ agents, connected, elementSelected, running, 
       <label style={{ fontSize: 12, color: '#444', display: 'block', marginTop: 10 }}>
         Prompt
         <textarea
+          ref={promptRef}
           style={{ ...fieldStyle, minHeight: 64, resize: 'vertical' }}
           placeholder="e.g. Make this button blue"
           value={prompt}

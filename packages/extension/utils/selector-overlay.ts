@@ -1,5 +1,6 @@
 import type { ContentToPanelMessage, PanelToContentMessage } from '@vizion/shared';
 import { extractElementContext } from './dom.js';
+import { InlineEditor } from './inline-editor.js';
 
 const HIGHLIGHT_COLOR = '#2f6bff';
 
@@ -13,6 +14,7 @@ export class SelectorOverlay {
   private box: HTMLDivElement | undefined;
   private label: HTMLDivElement | undefined;
   private currentTarget: Element | undefined;
+  private inlineEditor = new InlineEditor();
 
   constructor() {
     chrome.runtime.onMessage.addListener(
@@ -24,6 +26,11 @@ export class SelectorOverlay {
         }
         if (message.type === 'vizion:get-state') {
           sendResponse({ enabled: this.enabled });
+          return false;
+        }
+        if (message.type === 'vizion:edit-text') {
+          this.inlineEditor.start(message.selector);
+          sendResponse(undefined);
           return false;
         }
         return false;
