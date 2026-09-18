@@ -10,7 +10,8 @@
     "build": "pnpm -r build",
     "test": "pnpm -r test",
     "lint": "pnpm -r lint",
-    "typecheck": "pnpm -r typecheck"
+    "typecheck": "pnpm -r typecheck",
+    "test:e2e": "pnpm --filter @vizion/extension build && pnpm --filter @vizion/e2e test"
   },
   "devDependencies": {
     "eslint": "^9.0.0",
