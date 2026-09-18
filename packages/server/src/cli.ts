@@ -16,7 +16,12 @@ async function main(): Promise<void> {
   const cwd = process.cwd();
   const server = createServer({ port, cwd });
   await server.start();
-  console.log(`Vizion server listening on http://127.0.0.1:${port} (project: ${cwd})`);
+  console.log(`Vizion server listening on http://127.0.0.1:${server.port} (project: ${cwd})`);
+  console.log(
+    server.agents.length > 0
+      ? `Detected agents: ${server.agents.join(', ')}`
+      : 'No agents detected: install codex or claude',
+  );
 }
 
 main().catch((err: unknown) => {
