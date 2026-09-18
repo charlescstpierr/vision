@@ -1,0 +1,27 @@
+{
+  "name": "@charlescstpierr/vizion",
+  "version": "0.0.0",
+  "private": false,
+  "type": "module",
+  "bin": {
+    "vizion": "./dist/cli.js"
+  },
+  "main": "./dist/server.js",
+  "types": "./dist/server.d.ts",
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsup src/cli.ts src/server.ts --format esm --dts --clean --target node22",
+    "test": "vitest run",
+    "lint": "eslint src",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@vizion/shared": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsup": "^8.3.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  }
+}
