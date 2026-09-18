@@ -1,3 +1,6 @@
+export * from './extension-messages.js';
+export * from './agent.js';
+
 export const DEFAULT_PORT = 7331;
 
 export interface ElementContext {
