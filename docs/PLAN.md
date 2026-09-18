@@ -16,11 +16,13 @@ Deux modes:
 - Cas d'usage: les deux modes (source + overlay).
 - Agent: Codex CLI et Claude Code, sélectionnable, derrière une abstraction `AgentRunner`.
 - Liaison extension ↔ machine: serveur Node local (HTTP + WebSocket sur `127.0.0.1`).
-- Stack extension: TypeScript, Vite, React, plugin CRXJS.
+- Stack extension: TypeScript, Vite, React, framework WXT (cibles Edge et Chrome).
 - Racine du projet: le serveur est lancé dans le dossier du projet (`npx vizion`), son cwd est la racine de recherche donnée à l'agent.
 - Validation: sortie de l'agent en streaming dans le panneau, puis diff des fichiers avec Accepter / Rejeter avant application.
 - MVP: sélection + prompt texte, édition inline du texte, panneau de styles rapides (couleur, taille, marge) sans passer par l'agent.
 - OS: Windows et macOS.
+- Nom npm: `@charlescstpierr/vizion`, commande `vizion` (le nom `vizion` est déjà pris).
+- Sub-agents: Sonnet pour tout ce qui touche la config, les APIs d'extension, le serveur et le diff. Haiku seulement pour des composants isolés avec spec précise et pour la documentation.
 
 ## 3. Architecture
 
@@ -38,8 +40,8 @@ vizion/
 ### 3.1 Extension
 
 - **Content script**: overlay de sélection (hover highlight, clic = sélection), extraction du contexte de l'élément (sélecteur CSS unique, outerHTML tronqué, classes, styles calculés pertinents, texte, chemin DOM, position). Édition inline du texte (double-clic → contenteditable). Application des overrides overlay au chargement de la page.
-- **Side panel (React)**: état de connexion au serveur, élément sélectionné, choix de l'agent, champ prompt, sortie streaming, vue diff avec Accepter / Rejeter, panneau de styles rapides, liste des overrides overlay pour l'URL courante.
-- **Service worker**: relais des messages content script ↔ side panel, client WebSocket vers le serveur, détection de la présence du serveur (ping), stockage des overrides (`chrome.storage.local`).
+- **Side panel (React)**: tient la connexion WebSocket au serveur (un service worker MV3 est tué après 30 s d'inactivité, le side panel est un document persistant). Affiche l'état de connexion au serveur, élément sélectionné, choix de l'agent, champ prompt, sortie streaming, vue diff avec Accepter / Rejeter, panneau de styles rapides, liste des overrides overlay pour l'URL courante.
+- **Service worker**: relais des messages content script ↔ side panel, ouverture du side panel au clic sur l'icône, stockage des overrides (`chrome.storage.local`).
 
 ### 3.2 Serveur local (`packages/server`)
 
@@ -48,7 +50,8 @@ vizion/
 - **AgentRunner** (interface): `run(request) → AsyncIterable<AgentEvent>`. Deux implémentations:
   - `CodexRunner`: lance `codex` en mode non interactif (`codex exec`), lit stdout en streaming.
   - `ClaudeRunner`: lance `claude -p --output-format stream-json`, lit les événements.
-- **Sandbox de diff**: l'agent travaille dans une copie git (`git worktree` temporaire) ou, plus simple pour le MVP, directement dans le projet avec `git stash` de sécurité, puis `git diff` est envoyé au panneau. Accepter = garder, Rejeter = `git checkout` des fichiers touchés. Décision au jalon 3.
+- **Diff et rejet**: avant de lancer l'agent, le serveur prend un instantané (`git status --porcelain` + contenu des fichiers déjà modifiés ou non suivis). Après, il compare et envoie au panneau un diff limité aux fichiers touchés par l'agent. Accepter = ne rien faire. Rejeter = restaurer chaque fichier touché à partir de l'instantané (`git checkout HEAD` si le fichier était propre, contenu sauvegardé sinon, suppression si nouveau).
+- **Permissions des agents**: les CLIs sont lancés en mode édition automatique (`codex exec --full-auto`, `claude -p --permission-mode acceptEdits`), parce que le diff Accepter / Rejeter est le portail de validation. Sans ça, l'exécution bloque sur une confirmation interactive.
 - Détection des CLIs (`which codex` / `which claude`, chemins Windows inclus).
 
 ### 3.3 Prompt envoyé à l'agent
@@ -77,15 +80,17 @@ Trouve le fichier source qui rend cet élément et applique la modification. Ne 
 
 | # | Jalon | Livrable | Sub-agents |
 |---|---|---|---|
-| 0 | Squelette monorepo | pnpm workspace, TS, ESLint, Vite + CRXJS, extension « hello » chargée dans Edge, serveur `/health` | 1 agent (haiku, effort bas) |
-| 1 | Sélection d'élément | Overlay hover/clic, `ElementContext` extrait, affiché dans le side panel | 1 agent (sonnet, effort moyen) |
-| 2 | Serveur + runners | WebSocket, `AgentRunner`, `CodexRunner`, `ClaudeRunner`, streaming vers le panneau | 2 agents en parallèle: serveur (sonnet), UI streaming (haiku) |
-| 3 | Diff + Accepter / Rejeter | Génération du diff, vue diff dans le panneau, restauration sur rejet | 1 agent (sonnet) |
-| 4 | Mode overlay | Overrides DOM/CSS persistés par URL, ré-application au chargement, liste dans le panneau | 1 agent (sonnet) |
-| 5 | Édition inline + styles rapides | Double-clic texte, panneau couleur / taille / marge, génère un override (overlay) ou un prompt agent (source) | 2 agents en parallèle (haiku) |
-| 6 | Finition | README d'installation Windows/macOS, `npx vizion` publiable, tests de bout en bout sur Edge et Chrome | 1 agent (haiku) |
+| 1 | Squelette monorepo | pnpm workspace, TS strict, WXT + React, extension « hello » chargeable dans Edge et Chrome, serveur `/health`, vitest | Sonnet |
+| 2 | Sélection d'élément | Overlay hover/clic, `ElementContext` extrait, affiché dans le side panel | Sonnet |
+| 3 | Serveur + runners | WebSocket dans le side panel, `AgentRunner`, `CodexRunner`, `ClaudeRunner`, streaming vers le panneau | Sonnet (serveur), Haiku (vue streaming) |
+| 4 | Diff + Accepter / Rejeter | Instantané, diff des fichiers touchés, vue diff, restauration sur rejet | Sonnet |
+| 5 | Mode overlay | Overrides DOM/CSS persistés par URL, ré-application au chargement (MutationObserver), liste dans le panneau | Sonnet |
+| 6 | Édition inline + styles rapides | Double-clic texte, panneau couleur / taille / marge, génère un override (overlay) ou un prompt agent (source) | Haiku, spec fournie |
+| 7 | Finition | README d'installation Windows/macOS, paquet publiable, tests de bout en bout sur Edge et Chrome | Sonnet (tests), Haiku (README) |
 
-Chaque jalon = une PR sur la branche de travail, revue avant le suivant.
+Dépendances: 2 dépend de 1. Les jalons 3 → 4 et 5 → 6 sont deux chaînes indépendantes qui partent de 2 et peuvent avancer en parallèle. 7 dépend de tout.
+
+Chaque jalon = un commit revu sur la branche de travail avant le suivant.
 
 ## 6. Risques et points ouverts
 
