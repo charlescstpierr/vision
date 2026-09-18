@@ -1,9 +1,11 @@
-import { useEffect, useState } from 'react';
-import { DEFAULT_PORT } from '@vizion/shared';
-import type { ContentToPanelMessage, ElementContext, PanelToContentMessage } from '@vizion/shared';
+import { useEffect, useReducer, useState } from 'react';
+import type { AgentKind, ContentToPanelMessage, ElementContext, PanelToContentMessage } from '@vizion/shared';
 import ElementCard from './components/ElementCard.js';
-
-type Status = { kind: 'loading' } | { kind: 'connected'; cwd: string } | { kind: 'disconnected' };
+import RunPanel from './components/RunPanel.js';
+import AgentOutput from './components/AgentOutput.js';
+import DiffView from './components/DiffView.js';
+import { useVizionServer } from './hooks/useVizionServer.js';
+import { initialRunState, runReducer } from './state/runState.js';
 
 async function sendToActiveTab(message: PanelToContentMessage): Promise<unknown> {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -12,25 +14,13 @@ async function sendToActiveTab(message: PanelToContentMessage): Promise<unknown>
 }
 
 export default function App() {
-  const [status, setStatus] = useState<Status>({ kind: 'loading' });
+  const server = useVizionServer();
   const [selectMode, setSelectMode] = useState(false);
   const [element, setElement] = useState<ElementContext | undefined>(undefined);
   const [notice, setNotice] = useState<string | undefined>(undefined);
+  const [run, dispatch] = useReducer(runReducer, initialRunState);
 
-  useEffect(() => {
-    let cancelled = false;
-    fetch(`http://127.0.0.1:${DEFAULT_PORT}/health`)
-      .then((res) => res.json() as Promise<{ cwd: string }>)
-      .then((data) => {
-        if (!cancelled) setStatus({ kind: 'connected', cwd: data.cwd });
-      })
-      .catch(() => {
-        if (!cancelled) setStatus({ kind: 'disconnected' });
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  useEffect(() => server.subscribe((message) => dispatch({ type: 'server', message })), [server]);
 
   useEffect(() => {
     const listener = (message: ContentToPanelMessage) => {
@@ -56,22 +46,55 @@ export default function App() {
     }
   };
 
+  const runAgent = (agent: AgentKind, prompt: string) => {
+    if (!element) return;
+    dispatch({ type: 'start', agent, prompt });
+    server.send({ type: 'run', agent, prompt, element });
+  };
+
+  const connected = server.status === 'connected';
+
   return (
     <div style={{ fontFamily: 'system-ui, sans-serif', padding: 16 }}>
-      <h1 style={{ fontSize: 18, marginBottom: 8 }}>Vizion</h1>
-      {status.kind === 'loading' && <p>Checking server...</p>}
-      {status.kind === 'connected' && <p>Connected to {status.cwd}</p>}
-      {status.kind === 'disconnected' && <p>Server not running. Run `npx vizion` in your project.</p>}
+      <h1 style={{ fontSize: 18, marginBottom: 4 }}>Vizion</h1>
+      <p style={{ fontSize: 12, color: '#666', margin: 0 }}>
+        {connected && server.hello ? `Source mode · ${server.hello.cwd}` : 'Overlay mode · no local server'}
+      </p>
+
+      {server.status === 'connecting' && <p>Connecting to server...</p>}
+      {server.status === 'connected' && <p>Connected to {server.hello?.cwd}</p>}
+      {server.status === 'disconnected' && <p>Server not running. Run `npx vizion` in your project.</p>}
 
       <button onClick={toggleSelectMode} style={{ marginTop: 8 }}>
         {selectMode ? 'Cancel (Esc)' : 'Select element'}
       </button>
 
-      {notice && (
-        <p style={{ color: '#a83232', fontSize: 12, marginTop: 8 }}>{notice}</p>
-      )}
+      {notice && <p style={{ color: '#a83232', fontSize: 12, marginTop: 8 }}>{notice}</p>}
 
       {element && <ElementCard element={element} onClear={() => setElement(undefined)} />}
+
+      <RunPanel
+        agents={server.hello?.agents ?? []}
+        connected={connected}
+        elementSelected={!!element}
+        running={run.running}
+        onRun={runAgent}
+      />
+
+      <AgentOutput events={run.events} />
+
+      {run.diff && (
+        <DiffView
+          files={run.diff}
+          error={run.error}
+          onAccept={() => server.send({ type: 'accept' })}
+          onReject={() => server.send({ type: 'reject' })}
+        />
+      )}
+
+      {run.error && !run.diff && run.events.length === 0 && (
+        <p style={{ color: '#a83232', fontSize: 12, marginTop: 8 }}>{run.error}</p>
+      )}
     </div>
   );
 }
