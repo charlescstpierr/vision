@@ -78,7 +78,7 @@ Trouve le fichier source qui rend cet élément et applique la modification. Ne 
 
 ## 5. Jalons
 
-État au 2026-09-18: les jalons 1 à 7 sont livrés sur la branche de travail. L'édition inline se déclenche par le bouton « Edit text » du panneau (pas par double-clic). Le runner Codex est écrit d'après la documentation du CLI, pas vérifié contre un binaire.
+État au 2026-09-19: les jalons 1 à 7 sont mergés sur `main` (PR #1), suivis de trois blocs supplémentaires mergés séparément : multi-sélection, historique annuler / refaire et annulation d'un run accepté (PR #2) ; agent en mode Overlay qui propose des overrides (PR #3) ; capture d'écran de l'élément jointe au prompt (PR #4). L'édition inline se déclenche par le bouton « Modifier le texte » du panneau (pas par double-clic). Le runner Codex est écrit d'après la documentation du CLI et la revue Codex a validé l'option hors dépôt git, mais aucun run réel n'a été exécuté contre le binaire.
 
 | # | Jalon | Livrable | Sub-agents |
 |---|---|---|---|

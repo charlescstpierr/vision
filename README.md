@@ -84,12 +84,13 @@ Il annote chaque élément hôte JSX (`div`, `button`, ...) avec un attribut `da
 
 1. Ouvre le panneau latéral (clique sur l'icône de la barre d'outils).
 2. La ligne de statut affiche « Mode Source » (serveur + localhost) ou « Mode Overlay » (aucun serveur).
-3. Clique sur « Sélectionner un élément » et clique sur l'élément à modifier.
+3. Clique sur « Sélectionner un élément » et clique sur l'élément à modifier. Maj+clic ajoute d'autres éléments à la sélection.
 4. La carte d'élément affiche le sélecteur, le chemin DOM et les styles calculés.
-5. Modifications rapides : bouton « Modifier le texte », lignes couleur/taille/marge, ou écris une invite complète.
-6. Choisis un agent (Codex ou Claude), puis « Envoyer à l'agent ».
+5. Modifications rapides : bouton « Modifier le texte », lignes couleur/taille/marge, ou écris une invite complète. En mode Overlay, chaque modification devient un override ; « Annuler » / « Refaire » dans la section Historique.
+6. Choisis un agent (Codex ou Claude), coche « Joindre une capture de l'élément » si tu veux que l'agent voie le rendu (premier clic : capture mise en attente, second clic : envoi), puis « Envoyer à l'agent ».
 7. Regarde le résultat s'afficher en direct dans le panneau.
-8. Une fois terminé, révise le diff, clique sur « Accepter » ou « Rejeter ».
+8. En mode Source : révise le diff, clique sur « Accepter » ou « Rejeter ». Un run accepté peut être annulé plus tard depuis l'Historique.
+9. En mode Overlay avec le serveur allumé (site distant) : l'agent propose des overrides de styles ou de texte ; « Appliquer » les pose sur la page, « Ignorer » les écarte.
 
 ## Notes Windows et macOS
 
