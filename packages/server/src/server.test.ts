@@ -6,7 +6,9 @@ import { promisify } from 'node:util';
 import { describe, expect, it } from 'vitest';
 import { WebSocket } from 'ws';
 import type { AgentEvent, AgentKind, AgentRunner, ServerMessage } from '@vizion/shared';
-import { createServer } from './server.js';
+import { createServer, OpLock } from './server.js';
+
+const IS_WIN32 = process.platform === 'win32';
 
 const execFileAsync = promisify(execFile);
 const TEST_TOKEN = 'a'.repeat(32);
@@ -41,6 +43,31 @@ describe('server', () => {
     } finally {
       await server.stop();
     }
+  });
+});
+
+describe('OpLock', () => {
+  it('allows only one operation at a time and releases it', () => {
+    const lock = new OpLock();
+    expect(lock.active).toBeNull();
+    expect(lock.acquire('run')).toBe(true);
+    expect(lock.active).toBe('run');
+    expect(lock.acquire('undo')).toBe(false);
+    expect(lock.acquire('run')).toBe(false);
+    lock.release('run');
+    expect(lock.active).toBeNull();
+
+    expect(lock.acquire('undo')).toBe(true);
+    expect(lock.acquire('run')).toBe(false);
+    lock.release('undo');
+    expect(lock.active).toBeNull();
+  });
+
+  it('release is a no-op when it does not name the currently held operation', () => {
+    const lock = new OpLock();
+    lock.acquire('run');
+    lock.release('undo');
+    expect(lock.active).toBe('run');
   });
 });
 
@@ -347,6 +374,7 @@ describe('server diff / accept / reject', () => {
       expect(restoredMessage).toEqual({ type: 'restored', files: ['touched.txt'] });
       const afterReject = await reader.next();
       expect(afterReject).toEqual({ type: 'diff', files: [] });
+      expect(await reader.next()).toEqual({ type: 'history', runs: [] });
       await expect(fs.readFile(path.join(cwd, 'touched.txt'))).rejects.toThrow();
 
       ws.send(JSON.stringify({ type: 'reject' }));
@@ -620,6 +648,327 @@ describe('server run history / undo', () => {
       await reader.next(); // history
 
       ws.close();
+    } finally {
+      await server.stop();
+      await fs.rm(cwd, { recursive: true, force: true });
+    }
+  });
+});
+
+const ORIGINAL_BINARY = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0x0d, 0x0a, 0x1a]);
+const MODIFIED_BINARY = Buffer.from([0x00, 0x01, 0x02, 0x00, 0xff, 0xfe]);
+const NEW_BINARY = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0x00, 0x01, 0x02]);
+
+async function setupGitRepoWithBinary(): Promise<string> {
+  const cwd = await setupGitRepo();
+  await fs.writeFile(path.join(cwd, 'image.bin'), ORIGINAL_BINARY);
+  await execFileAsync('git', ['add', 'image.bin'], { cwd });
+  await execFileAsync(
+    'git',
+    ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-q', '-m', 'binary'],
+    { cwd },
+  );
+  return cwd;
+}
+
+class BinaryRunner implements AgentRunner {
+  readonly kind = 'claude' as const;
+  constructor(private readonly cwd: string) {}
+  isAvailable(): Promise<boolean> {
+    return Promise.resolve(true);
+  }
+  async *run(): AsyncIterable<AgentEvent> {
+    yield { type: 'started', agent: 'claude' };
+    await fs.writeFile(path.join(this.cwd, 'new.bin'), NEW_BINARY);
+    await fs.writeFile(path.join(this.cwd, 'image.bin'), MODIFIED_BINARY);
+    yield { type: 'done', exitCode: 0 };
+  }
+}
+
+class EmptyFileRunner implements AgentRunner {
+  readonly kind = 'claude' as const;
+  constructor(private readonly cwd: string) {}
+  isAvailable(): Promise<boolean> {
+    return Promise.resolve(true);
+  }
+  async *run(): AsyncIterable<AgentEvent> {
+    yield { type: 'started', agent: 'claude' };
+    await fs.writeFile(path.join(this.cwd, 'empty.txt'), '');
+    yield { type: 'done', exitCode: 0 };
+  }
+}
+
+async function setupGitRepoWithScript(): Promise<string> {
+  const cwd = await setupGitRepo();
+  const file = path.join(cwd, 'script.sh');
+  await fs.writeFile(file, '#!/bin/sh\necho original\n');
+  await fs.chmod(file, 0o644);
+  await execFileAsync('git', ['add', 'script.sh'], { cwd });
+  await execFileAsync(
+    'git',
+    ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-q', '-m', 'script'],
+    { cwd },
+  );
+  return cwd;
+}
+
+class ChmodRunner implements AgentRunner {
+  readonly kind = 'claude' as const;
+  constructor(private readonly cwd: string) {}
+  isAvailable(): Promise<boolean> {
+    return Promise.resolve(true);
+  }
+  async *run(): AsyncIterable<AgentEvent> {
+    yield { type: 'started', agent: 'claude' };
+    const file = path.join(this.cwd, 'script.sh');
+    await fs.writeFile(file, '#!/bin/sh\necho changed\n');
+    await fs.chmod(file, 0o755);
+    yield { type: 'done', exitCode: 0 };
+  }
+}
+
+/** Drains messages from `reader` until a `run-undone` or `error` arrives. */
+async function readUndoOutcome(
+  reader: ReturnType<typeof createMessageReader>,
+): Promise<ServerMessage> {
+  for (;;) {
+    const message = await reader.next();
+    if (message.type === 'run-undone' || message.type === 'error') return message;
+  }
+}
+
+describe('server undo-run: byte-based restore', () => {
+  it('undoes a run touching binary files, restoring exact bytes and deleting the new one', async () => {
+    const cwd = await setupGitRepoWithBinary();
+    const server = createServer({
+      port: 0,
+      cwd,
+      runners: [new BinaryRunner(cwd)],
+      allowedOriginPrefixes: [TEST_ORIGIN],
+      token: TEST_TOKEN,
+    });
+    await server.start();
+
+    try {
+      const port = server.port;
+      const { ws, reader } = await openSocket(port);
+      await reader.next(); // hello
+      await reader.next(); // history
+
+      ws.send(JSON.stringify({ type: 'run', agent: 'claude', prompt: 'binary', element }));
+      const events: ServerMessage[] = [];
+      while (events.length < 3) events.push(await reader.next());
+      const diffMessage = events[2];
+      if (diffMessage?.type !== 'diff') throw new Error('expected diff message');
+      expect(diffMessage.files.map((f) => f.path).sort()).toEqual(['image.bin', 'new.bin']);
+
+      ws.send(JSON.stringify({ type: 'accept' }));
+      await reader.next(); // diff []
+      const historyMsg = await reader.next();
+      if (historyMsg.type !== 'history') throw new Error('expected history');
+      const record = historyMsg.runs[0];
+      if (!record) throw new Error('expected a record');
+
+      ws.send(JSON.stringify({ type: 'undo-run', id: record.id }));
+      const undone = await readUndoOutcome(reader);
+      if (undone.type !== 'run-undone') throw new Error(`expected run-undone, got ${JSON.stringify(undone)}`);
+
+      expect(await fs.readFile(path.join(cwd, 'image.bin'))).toEqual(ORIGINAL_BINARY);
+      await expect(fs.readFile(path.join(cwd, 'new.bin'))).rejects.toThrow();
+
+      ws.close();
+    } finally {
+      await server.stop();
+      await fs.rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('undoes a run that added an empty file by deleting it', async () => {
+    const cwd = await setupGitRepo();
+    const server = createServer({
+      port: 0,
+      cwd,
+      runners: [new EmptyFileRunner(cwd)],
+      allowedOriginPrefixes: [TEST_ORIGIN],
+      token: TEST_TOKEN,
+    });
+    await server.start();
+
+    try {
+      const port = server.port;
+      const { ws, reader } = await openSocket(port);
+      await reader.next(); // hello
+      await reader.next(); // history
+
+      ws.send(JSON.stringify({ type: 'run', agent: 'claude', prompt: 'empty', element }));
+      const events: ServerMessage[] = [];
+      while (events.length < 3) events.push(await reader.next());
+      const diffMessage = events[2];
+      if (diffMessage?.type !== 'diff') throw new Error('expected diff message');
+      expect(diffMessage.files).toEqual([expect.objectContaining({ path: 'empty.txt', status: 'added' })]);
+
+      ws.send(JSON.stringify({ type: 'accept' }));
+      await reader.next(); // diff []
+      const historyMsg = await reader.next();
+      if (historyMsg.type !== 'history') throw new Error('expected history');
+      const record = historyMsg.runs[0];
+      if (!record) throw new Error('expected a record');
+
+      ws.send(JSON.stringify({ type: 'undo-run', id: record.id }));
+      const undone = await readUndoOutcome(reader);
+      if (undone.type !== 'run-undone') throw new Error(`expected run-undone, got ${JSON.stringify(undone)}`);
+
+      await expect(fs.readFile(path.join(cwd, 'empty.txt'))).rejects.toThrow();
+
+      ws.close();
+    } finally {
+      await server.stop();
+      await fs.rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it.skipIf(IS_WIN32)('undoes a run that changed both content and mode, restoring both', async () => {
+    const cwd = await setupGitRepoWithScript();
+    const server = createServer({
+      port: 0,
+      cwd,
+      runners: [new ChmodRunner(cwd)],
+      allowedOriginPrefixes: [TEST_ORIGIN],
+      token: TEST_TOKEN,
+    });
+    await server.start();
+
+    try {
+      const port = server.port;
+      const { ws, reader } = await openSocket(port);
+      await reader.next(); // hello
+      await reader.next(); // history
+
+      ws.send(JSON.stringify({ type: 'run', agent: 'claude', prompt: 'chmod', element }));
+      const events: ServerMessage[] = [];
+      while (events.length < 3) events.push(await reader.next());
+      const diffMessage = events[2];
+      if (diffMessage?.type !== 'diff') throw new Error('expected diff message');
+      expect(diffMessage.files).toEqual([expect.objectContaining({ path: 'script.sh', status: 'modified' })]);
+
+      ws.send(JSON.stringify({ type: 'accept' }));
+      await reader.next(); // diff []
+      const historyMsg = await reader.next();
+      if (historyMsg.type !== 'history') throw new Error('expected history');
+      const record = historyMsg.runs[0];
+      if (!record) throw new Error('expected a record');
+
+      ws.send(JSON.stringify({ type: 'undo-run', id: record.id }));
+      const undone = await readUndoOutcome(reader);
+      if (undone.type !== 'run-undone') throw new Error(`expected run-undone, got ${JSON.stringify(undone)}`);
+
+      const scriptPath = path.join(cwd, 'script.sh');
+      expect(await fs.readFile(scriptPath, 'utf8')).toBe('#!/bin/sh\necho original\n');
+      const stat = await fs.stat(scriptPath);
+      expect(stat.mode & 0o777).toBe(0o644);
+
+      ws.close();
+    } finally {
+      await server.stop();
+      await fs.rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses undo and leaves the file untouched when it was recreated after the run deleted it', async () => {
+    const cwd = await setupGitRepo();
+    const server = createServer({
+      port: 0,
+      cwd,
+      runners: [new DeletingRunner(cwd)],
+      allowedOriginPrefixes: [TEST_ORIGIN],
+      token: TEST_TOKEN,
+    });
+    await server.start();
+
+    try {
+      const port = server.port;
+      const { ws, reader } = await openSocket(port);
+      await reader.next(); // hello
+      await reader.next(); // history
+
+      ws.send(JSON.stringify({ type: 'run', agent: 'claude', prompt: 'delete it', element }));
+      const events: ServerMessage[] = [];
+      while (events.length < 3) events.push(await reader.next());
+      const diffMessage = events[2];
+      if (diffMessage?.type !== 'diff') throw new Error('expected diff message');
+      expect(diffMessage.files).toEqual([expect.objectContaining({ path: 'tracked.txt', status: 'deleted' })]);
+
+      ws.send(JSON.stringify({ type: 'accept' }));
+      await reader.next(); // diff []
+      const historyMsg = await reader.next();
+      if (historyMsg.type !== 'history') throw new Error('expected history');
+      const record = historyMsg.runs[0];
+      if (!record) throw new Error('expected a record');
+
+      // The user recreates the file at the same path with new content.
+      await fs.writeFile(path.join(cwd, 'tracked.txt'), 'user recreated this\n');
+
+      ws.send(JSON.stringify({ type: 'undo-run', id: record.id }));
+      const result = await readUndoOutcome(reader);
+      if (result.type !== 'error') throw new Error(`expected error, got ${JSON.stringify(result)}`);
+      expect(result.message).toContain('Conflit');
+      expect(await fs.readFile(path.join(cwd, 'tracked.txt'), 'utf8')).toBe('user recreated this\n');
+
+      ws.close();
+    } finally {
+      await server.stop();
+      await fs.rm(cwd, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('server: multi-client broadcast and ordering', () => {
+  it('broadcasts history to every client after accept, and refuses a run from another client while a diff is pending', async () => {
+    const cwd = await setupGitRepo();
+    const server = createServer({
+      port: 0,
+      cwd,
+      runners: [new MultiFileRunner(cwd)],
+      allowedOriginPrefixes: [TEST_ORIGIN],
+      token: TEST_TOKEN,
+    });
+    await server.start();
+
+    try {
+      const port = server.port;
+      const { ws: wsA, reader: readerA } = await openSocket(port);
+      await readerA.next(); // hello
+      await readerA.next(); // history
+      const { ws: wsB, reader: readerB } = await openSocket(port);
+      await readerB.next(); // hello
+      await readerB.next(); // history
+
+      wsA.send(JSON.stringify({ type: 'run', agent: 'claude', prompt: 'do multi', element }));
+      const events: ServerMessage[] = [];
+      while (events.length < 3) events.push(await readerA.next());
+      expect(events[2]?.type).toBe('diff'); // A now has a pending, undecided diff
+
+      // B's run is refused: a pending diff exists project-wide, not just on A's socket.
+      wsB.send(JSON.stringify({ type: 'run', agent: 'claude', prompt: 'p2', element }));
+      expect(await readerB.next()).toEqual({
+        type: 'error',
+        message: "Accepte ou rejette d'abord les modifications en attente.",
+      });
+
+      wsA.send(JSON.stringify({ type: 'accept' }));
+      expect(await readerA.next()).toEqual({ type: 'diff', files: [] });
+      const historyA = await readerA.next();
+      if (historyA.type !== 'history') throw new Error('expected history');
+      expect(historyA.runs).toHaveLength(1);
+
+      // B, which never accepted or rejected anything itself, still sees the broadcast.
+      const historyB = await readerB.next();
+      if (historyB.type !== 'history') throw new Error('expected history');
+      expect(historyB.runs).toHaveLength(1);
+      expect(historyB.runs[0]).toMatchObject({ status: 'accepted', prompt: 'do multi' });
+
+      wsA.close();
+      wsB.close();
     } finally {
       await server.stop();
       await fs.rm(cwd, { recursive: true, force: true });

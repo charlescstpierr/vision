@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import type { FileDiff, RunRecord } from '@vizion/shared';
+import type { RunRecord } from '@vizion/shared';
 import { RunHistory } from './history.js';
+import type { UndoFile } from './snapshot.js';
 
 function makeRecord(overrides: Partial<Omit<RunRecord, 'id'>> = {}): Omit<RunRecord, 'id'> {
   return {
@@ -36,14 +37,20 @@ describe('RunHistory', () => {
     expect(list[49]?.prompt).toBe('run-5');
   });
 
-  it('get returns the stored record and its patches; unknown ids are undefined', () => {
+  it('get returns the stored record and its files; unknown ids are undefined', () => {
     const history = new RunHistory();
-    const patches: FileDiff[] = [{ path: 'a.txt', status: 'modified', patch: 'diff --git a/a.txt b/a.txt\n' }];
-    const record = history.add(makeRecord(), patches);
+    const files: UndoFile[] = [
+      {
+        path: 'a.txt',
+        before: { content: Buffer.from('old'), mode: 0o644 },
+        after: { content: Buffer.from('new'), mode: 0o644 },
+      },
+    ];
+    const record = history.add(makeRecord(), files);
 
     const entry = history.get(record.id);
     expect(entry?.record).toEqual(record);
-    expect(entry?.patches).toEqual(patches);
+    expect(entry?.files).toEqual(files);
     expect(history.get('missing')).toBeUndefined();
   });
 

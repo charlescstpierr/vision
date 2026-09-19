@@ -187,6 +187,63 @@ export async function takeSnapshot(cwd: string, options: TakeSnapshotOptions = {
   return { isGit: true, cwd, root, headSha, files };
 }
 
+export interface UndoFileSide {
+  content: Buffer;
+  /** POSIX permission bits; 0 on win32, where modes aren't meaningful. */
+  mode: number;
+}
+
+/** Byte-exact before/after state of one path touched by a run, as needed to undo it. */
+export interface UndoFile {
+  path: string;
+  /** null if the file did not exist before the run. */
+  before: UndoFileSide | null;
+  /** null if the file does not exist in the current working tree. */
+  after: UndoFileSide | null;
+}
+
+/**
+ * Resolves what `relPath` looked like right before the run captured by
+ * `snapshot`: the snapshot's own content for a file that was already dirty,
+ * or the blob and mode recorded at `snapshot.headSha` otherwise. Returns
+ * null if the file did not exist before the run, or outside a git repo.
+ */
+export async function readBefore(snapshot: Snapshot, relPath: string): Promise<UndoFileSide | null> {
+  if (!snapshot.isGit) return null;
+  const root = snapshot.root;
+  const content = await resolveBeforeContent(root, snapshot, relPath);
+  if (content === null) return null;
+  const mode = IS_WIN32 ? 0 : ((await resolveBeforeMode(root, snapshot, relPath)) ?? 0o644);
+  return { content, mode };
+}
+
+async function readAfter(root: string, relPath: string): Promise<UndoFileSide | null> {
+  const content = await readCurrentContent(root, relPath);
+  if (content === null) return null;
+  const mode = IS_WIN32 ? 0 : ((await getCurrentMode(root, relPath)) ?? 0o644);
+  return { content, mode };
+}
+
+/**
+ * Builds the byte-exact before/after pairs `undo-run` needs for each path a
+ * run touched, from the pre-run `snapshot` and the current working tree
+ * (called at `accept` time, so "after" is what the run actually left
+ * behind). Paths marked `tooLarge` in the snapshot are skipped, since their
+ * pre-run content was never captured; in practice `computeDiff` already
+ * excludes them from the paths passed in here.
+ */
+export async function buildUndoFiles(snapshot: Snapshot, paths: string[]): Promise<UndoFile[]> {
+  if (!snapshot.isGit) return [];
+  const root = snapshot.root;
+  const results: UndoFile[] = [];
+  for (const relPath of paths) {
+    if (snapshot.files.get(relPath)?.tooLarge) continue;
+    const [before, after] = await Promise.all([readBefore(snapshot, relPath), readAfter(root, relPath)]);
+    results.push({ path: relPath, before, after });
+  }
+  return results;
+}
+
 function buffersEqual(a: Buffer | null, b: Buffer | null): boolean {
   if (a === null || b === null) return a === b;
   return a.equals(b);
