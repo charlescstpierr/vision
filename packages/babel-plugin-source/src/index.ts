@@ -29,7 +29,7 @@ export default function babelPluginSource(
   const attributeName = options.attribute ?? 'data-vizion-source';
 
   return {
-    name: '@vizion/babel-plugin-source',
+    name: '@charlescstpierr/vizion-babel-plugin-source',
     visitor: {
       JSXOpeningElement(path, state: PluginPass) {
         const { node } = path;

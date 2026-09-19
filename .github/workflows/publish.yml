@@ -28,7 +28,7 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
-      - run: pnpm --filter @vizion/babel-plugin-source publish --no-git-checks --access public
+      - run: pnpm --filter @charlescstpierr/vizion-babel-plugin-source publish --no-git-checks --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 

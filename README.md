@@ -66,14 +66,14 @@ Dans un projet Vite + React, ajoute le plugin à `vite.config.ts` (dev seulement
 
 ```ts
 export default defineConfig(({ command }) => ({
-  plugins: [react({ babel: { plugins: command === 'serve' ? ['@vizion/babel-plugin-source'] : [] } })],
+  plugins: [react({ babel: { plugins: command === 'serve' ? ['@charlescstpierr/vizion-babel-plugin-source'] : [] } })],
 }));
 ```
 
 Installe-le comme dépendance de dev :
 
 ```sh
-npm i -D @vizion/babel-plugin-source
+npm i -D @charlescstpierr/vizion-babel-plugin-source
 ```
 
 Il annote chaque élément hôte JSX (`div`, `button`, ...) avec un attribut `data-vizion-source="file:line:column"`. Vizion le lit depuis l'élément sélectionné (ou son ancêtre annoté le plus proche) et le transmet à l'agent, pour qu'il commence au bon fichier plutôt que de deviner à partir du DOM.
