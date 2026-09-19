@@ -27,9 +27,6 @@ async function sendToActiveTab(message: PanelToContentMessage): Promise<unknown>
   return chrome.tabs.sendMessage(tab.id, message);
 }
 
-/** `chrome.storage.local` key for the "Joindre une capture" checkbox, kept separate from `vizion:settings` so toggling it never touches the server connection settings. */
-const ATTACH_SCREENSHOT_STORAGE_KEY = 'vizion:settings.attachScreenshot';
-
 /** Strips the `captureElementScreenshot` "Capture impossible : " prefix so its reason can be reused in the panel's own notice wording. */
 function captureFailureReason(err: unknown): string {
   const message = err instanceof Error ? err.message : String(err);
@@ -47,39 +44,15 @@ export default function App() {
   const [run, dispatch] = useReducer(runReducer, initialRunState);
   const [prompt, setPrompt] = useState('');
   const promptRef = useRef<HTMLTextAreaElement>(null);
-  const [attachScreenshot, setAttachScreenshotState] = useState(true);
   const [capturing, setCapturing] = useState(false);
-  // True once the user has explicitly removed a staged capture ("Retirer")
-  // without having sent it yet — distinguishes "Envoyer sans capture" from
-  // the initial "Envoyer à l'agent" (no capture attempted yet).
-  const [screenshotDismissed, setScreenshotDismissed] = useState(false);
 
   useEffect(() => server.subscribe((message) => dispatch({ type: 'server', message })), [server]);
-
-  // Load the persisted "Joindre une capture" preference once on mount.
-  useEffect(() => {
-    let cancelled = false;
-    void chrome.storage.local.get(ATTACH_SCREENSHOT_STORAGE_KEY).then((result) => {
-      if (cancelled) return;
-      const stored = result[ATTACH_SCREENSHOT_STORAGE_KEY];
-      if (typeof stored === 'boolean') setAttachScreenshotState(stored);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  const setAttachScreenshot = (next: boolean) => {
-    setAttachScreenshotState(next);
-    void chrome.storage.local.set({ [ATTACH_SCREENSHOT_STORAGE_KEY]: next });
-  };
 
   // Clear the current selection when the active tab navigates elsewhere;
   // the run/diff state is left alone since it belongs to the agent run, not
   // to whichever element happened to be selected.
   useEffect(() => {
     setElements([]);
-    setScreenshotDismissed(false);
   }, [tabUrl]);
 
   // Fetch the agent run history as soon as the server says hello (on
@@ -93,18 +66,7 @@ export default function App() {
     }
   }, [server.hello]);
 
-  // A capture only counts as staged until it has been sent with a run; a
-  // capture from a previous run is never reused silently.
-  const stagedScreenshot = run.screenshot && !run.screenshotSent ? run.screenshot : null;
-
-  // Drives the "Envoyer..." button's label through the stage → send flow.
-  const sendLabel = capturing
-    ? 'Capture en cours...'
-    : attachScreenshot && stagedScreenshot
-      ? 'Envoyer avec la capture'
-      : attachScreenshot && screenshotDismissed
-        ? 'Envoyer sans capture'
-        : "Envoyer à l'agent";
+  const sendLabel = capturing ? 'Capture...' : "Envoyer à l'agent";
 
   const connected = server.status === 'connected';
   // Source mode requires both a live server connection and a local page:
@@ -128,7 +90,12 @@ export default function App() {
           if (prev.some((e) => e.selector === message.element.selector)) return prev;
           return [...prev, message.element];
         });
-        if (!message.append) setSelectMode(false);
+        if (!message.append) {
+          setSelectMode(false);
+          // Selecting an element is only ever a prelude to describing a
+          // change, so put the cursor where the user is going anyway.
+          promptRef.current?.focus();
+        }
       } else if (message.type === 'vizion:select-mode-changed') {
         setSelectMode(message.enabled);
       } else if (message.type === 'vizion:text-edited') {
@@ -152,21 +119,18 @@ export default function App() {
     }
   };
 
-  /** Captures the selected element(s) and stages the result as `run.screenshot` (not sent yet). */
-  const captureAndStage = async (): Promise<Screenshot | null> => {
+  /** Captures the selected element(s). Returns null (with a notice) if the capture fails. */
+  const capture = async (): Promise<Screenshot | null> => {
     setCapturing(true);
     setNotice(undefined);
     try {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
       if (!tab?.id) throw new Error('onglet actif introuvable');
-      const screenshot = await captureElementScreenshot(
+      return await captureElementScreenshot(
         tab.id,
         tab.windowId,
         elements.map((el) => el.selector),
       );
-      dispatch({ type: 'set-screenshot', screenshot });
-      setScreenshotDismissed(false);
-      return screenshot;
     } catch (err) {
       setNotice(`Capture impossible, envoi sans image : ${captureFailureReason(err)}`);
       return null;
@@ -175,31 +139,16 @@ export default function App() {
     }
   };
 
-  const removeStagedScreenshot = () => {
-    dispatch({ type: 'set-screenshot', screenshot: null });
-    setScreenshotDismissed(true);
-  };
-
-  const retakeScreenshot = () => {
-    void captureAndStage();
-  };
-
-  // First click (checkbox on, nothing staged yet): captures and stages the
-  // screenshot, then stops — the button relabels to prompt a second click.
-  // Any other click actually starts and sends the run, attaching whatever
-  // is staged (if the checkbox is on).
+  // One click: capture, then send. The capture used to be a checkbox plus a
+  // two-click stage-then-send, which asked the user to decide something they
+  // almost always wanted — seeing the element is what lets the agent act on
+  // "this one". A failed capture sends without the image rather than
+  // stopping, so the run never depends on it.
   const runAgent = async (agent: AgentKind, promptText: string) => {
     if (elements.length === 0 || !tabUrl) return;
 
-    if (attachScreenshot && !stagedScreenshot) {
-      const captured = await captureAndStage();
-      if (captured) return;
-      // Capture failed: fall through and send this click without an image,
-      // as before, instead of forcing a third click.
-    }
-
-    const screenshot = attachScreenshot ? stagedScreenshot : null;
-    dispatch({ type: 'start', agent, prompt: promptText, pageKey: overrideKey(tabUrl) });
+    const screenshot = await capture();
+    dispatch({ type: 'start', agent, prompt: promptText, pageKey: overrideKey(tabUrl), screenshot });
     const sent = server.send({
       type: 'run',
       agent,
@@ -333,15 +282,9 @@ export default function App() {
         undoNotice={run.undoNotice}
         error={run.error}
         onUndoRun={(id) => server.send({ type: 'undo-run', id })}
-        attachScreenshot={attachScreenshot}
-        onToggleAttachScreenshot={setAttachScreenshot}
         capturing={capturing}
         screenshot={run.screenshot}
-        screenshotSent={run.screenshotSent}
-        screenshotDismissed={screenshotDismissed}
         sendLabel={sendLabel}
-        onRemoveScreenshot={removeStagedScreenshot}
-        onRetakeScreenshot={retakeScreenshot}
       />
 
       <AgentOutput events={run.events} />

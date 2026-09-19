@@ -30,24 +30,19 @@ export interface RunState {
    */
   proposalError: string | null;
   /**
-   * The capture attached to the current/last run, if any. While a run is
-   * being composed this is a *staged* capture (not sent yet) — see
-   * `screenshotSent`. Reset (to `null`) only via `set-screenshot` or
-   * `clear`; `start` deliberately leaves it alone so a staged capture
-   * carries into the run it was taken for.
+   * The capture sent with the current run, kept so the panel can show what
+   * the agent was actually looking at. Every run carries one when the
+   * capture succeeds, so there is no "staged but unsent" state to track.
    */
   screenshot: Screenshot | null;
-  /** Whether `screenshot` has actually been sent with a run. Set true on `start`, reset to false on `clear` / `set-screenshot`. */
-  screenshotSent: boolean;
 }
 
 export type RunAction =
   | { type: 'server'; message: ServerMessage }
-  | { type: 'start'; agent: AgentKind; prompt: string; pageKey: string }
+  | { type: 'start'; agent: AgentKind; prompt: string; pageKey: string; screenshot: Screenshot | null }
   | { type: 'clear' }
   | { type: 'clear-proposal' }
   | { type: 'proposal-error'; message: string }
-  | { type: 'set-screenshot'; screenshot: Screenshot | null }
   /** The WebSocket send for a `run` failed (server connection lost): roll the run back to not-running. */
   | { type: 'send-failed' };
 
@@ -65,7 +60,6 @@ export const initialRunState: RunState = {
   proposal: null,
   proposalError: null,
   screenshot: null,
-  screenshotSent: false,
 };
 
 export function runReducer(state: RunState, action: RunAction): RunState {
@@ -84,7 +78,7 @@ export function runReducer(state: RunState, action: RunAction): RunState {
         pageKey: action.pageKey,
         proposal: null,
         proposalError: null,
-        screenshotSent: true,
+        screenshot: action.screenshot,
       };
     case 'clear':
       return initialRunState;
@@ -92,8 +86,6 @@ export function runReducer(state: RunState, action: RunAction): RunState {
       return { ...state, proposal: null, proposalError: null };
     case 'proposal-error':
       return { ...state, proposalError: action.message };
-    case 'set-screenshot':
-      return { ...state, screenshot: action.screenshot, screenshotSent: false };
     case 'send-failed':
       return { ...state, running: false, error: 'Connexion au serveur perdue, run non envoyé.' };
     case 'server': {

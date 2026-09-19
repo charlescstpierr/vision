@@ -4,8 +4,14 @@ import { initialRunState, runReducer, type RunState } from './runState.js';
 
 const PAGE_KEY = 'https://example.com/page';
 
-function start(state: RunState = initialRunState, pageKey = PAGE_KEY): RunState {
-  return runReducer(state, { type: 'start', agent: 'codex', prompt: 'do it', pageKey });
+const SHOT: Screenshot = { dataUrl: 'data:image/jpeg;base64,abc', width: 120, height: 80 };
+
+function start(
+  state: RunState = initialRunState,
+  pageKey = PAGE_KEY,
+  screenshot: Screenshot | null = null,
+): RunState {
+  return runReducer(state, { type: 'start', agent: 'codex', prompt: 'do it', pageKey, screenshot });
 }
 
 describe('runReducer', () => {
@@ -25,7 +31,6 @@ describe('runReducer', () => {
       proposal: null,
       proposalError: null,
       screenshot: null,
-      screenshotSent: true,
     });
   });
 
@@ -81,7 +86,7 @@ describe('runReducer', () => {
   it('start resets restoredFiles from a previous reject', () => {
     let state = start();
     state = runReducer(state, { type: 'server', message: { type: 'restored', files: ['a.ts'] } });
-    state = runReducer(state, { type: 'start', agent: 'codex', prompt: 'again', pageKey: PAGE_KEY });
+    state = start(state);
     expect(state.restoredFiles).toBeNull();
   });
 
@@ -210,46 +215,18 @@ describe('runReducer', () => {
     expect(state.proposal).toBeNull();
   });
 
-  it('set-screenshot stores the captured screenshot', () => {
-    const screenshot: Screenshot = { dataUrl: 'data:image/jpeg;base64,abc', width: 120, height: 80 };
-    let state = start();
-    state = runReducer(state, { type: 'set-screenshot', screenshot });
-    expect(state.screenshot).toEqual(screenshot);
+  it('start carries the capture taken for that run', () => {
+    expect(start(initialRunState, PAGE_KEY, SHOT).screenshot).toEqual(SHOT);
   });
 
-  it('set-screenshot with null removes a previously stored screenshot', () => {
-    const screenshot: Screenshot = { dataUrl: 'data:image/jpeg;base64,abc', width: 120, height: 80 };
-    let state = start();
-    state = runReducer(state, { type: 'set-screenshot', screenshot });
-    state = runReducer(state, { type: 'set-screenshot', screenshot: null });
-    expect(state.screenshot).toBeNull();
+  it('start with no capture clears the previous run\'s, so a stale image is never reused', () => {
+    const state = start(initialRunState, PAGE_KEY, SHOT);
+    expect(start(state).screenshot).toBeNull();
   });
 
-  it('starting a new run keeps a staged screenshot and marks it sent', () => {
-    const screenshot: Screenshot = { dataUrl: 'data:image/jpeg;base64,abc', width: 120, height: 80 };
-    let state = start();
-    state = runReducer(state, { type: 'set-screenshot', screenshot });
-    expect(state.screenshotSent).toBe(false);
-    state = start(state);
-    expect(state.screenshot).toEqual(screenshot);
-    expect(state.screenshotSent).toBe(true);
-  });
-
-  it('set-screenshot resets screenshotSent to false', () => {
-    let state = start();
-    expect(state.screenshotSent).toBe(true);
-    state = runReducer(state, { type: 'set-screenshot', screenshot: null });
-    expect(state.screenshotSent).toBe(false);
-  });
-
-  it('clear resets the screenshot and screenshotSent', () => {
-    const screenshot: Screenshot = { dataUrl: 'data:image/jpeg;base64,abc', width: 120, height: 80 };
-    let state = start();
-    state = runReducer(state, { type: 'set-screenshot', screenshot });
-    state = start(state);
-    state = runReducer(state, { type: 'clear' });
-    expect(state.screenshot).toBeNull();
-    expect(state.screenshotSent).toBe(false);
+  it('clear resets the screenshot', () => {
+    const state = start(initialRunState, PAGE_KEY, SHOT);
+    expect(runReducer(state, { type: 'clear' }).screenshot).toBeNull();
   });
 
   it('send-failed stops the run and reports the connection loss in French', () => {
@@ -259,12 +236,9 @@ describe('runReducer', () => {
     expect(state.error).toBe('Connexion au serveur perdue, run non envoyé.');
   });
 
-  it('send-failed leaves a staged screenshot untouched', () => {
-    const screenshot: Screenshot = { dataUrl: 'data:image/jpeg;base64,abc', width: 120, height: 80 };
-    let state = start();
-    state = runReducer(state, { type: 'set-screenshot', screenshot });
-    state = runReducer(state, { type: 'send-failed' });
-    expect(state.screenshot).toEqual(screenshot);
+  it('send-failed leaves the capture in place, so the panel still shows what was attempted', () => {
+    const state = runReducer(start(initialRunState, PAGE_KEY, SHOT), { type: 'send-failed' });
+    expect(state.screenshot).toEqual(SHOT);
   });
 
   it('clear-proposal clears only the proposal, leaving the rest of the state intact', () => {
