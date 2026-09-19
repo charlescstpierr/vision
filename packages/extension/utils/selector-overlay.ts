@@ -1,8 +1,39 @@
-import type { ContentToPanelMessage, PanelToContentMessage } from '@vizion/shared';
+import type { ContentToPanelMessage, PanelToContentMessage, RectReply } from '@vizion/shared';
 import { extractElementContext } from './dom.js';
 import { InlineEditor } from './inline-editor.js';
 
 const HIGHLIGHT_COLOR = '#2f6bff';
+
+type Rect = { x: number; y: number; width: number; height: number };
+
+function unionRect(elements: Element[]): Rect {
+  let left = Infinity;
+  let top = Infinity;
+  let right = -Infinity;
+  let bottom = -Infinity;
+  for (const el of elements) {
+    const r = el.getBoundingClientRect();
+    left = Math.min(left, r.left);
+    top = Math.min(top, r.top);
+    right = Math.max(right, r.right);
+    bottom = Math.max(bottom, r.bottom);
+  }
+  return { x: left, y: top, width: right - left, height: bottom - top };
+}
+
+/** Clips a viewport-relative rect to the visible viewport; `null` if nothing is left. */
+function clipToViewport(rect: Rect): Rect | null {
+  const left = Math.max(rect.x, 0);
+  const top = Math.max(rect.y, 0);
+  const right = Math.min(rect.x + rect.width, window.innerWidth);
+  const bottom = Math.min(rect.y + rect.height, window.innerHeight);
+  if (right <= left || bottom <= top) return null;
+  return { x: left, y: top, width: right - left, height: bottom - top };
+}
+
+function nextAnimationFrame(): Promise<void> {
+  return new Promise((resolve) => requestAnimationFrame(() => resolve()));
+}
 
 /**
  * Owns the hover-highlight overlay + selection lifecycle for the content
@@ -33,9 +64,47 @@ export class SelectorOverlay {
           sendResponse(undefined);
           return false;
         }
+        if (message.type === 'vizion:get-rect') {
+          void this.getRect(message.selectors).then(sendResponse);
+          return true;
+        }
         return false;
       },
     );
+  }
+
+  /**
+   * Computes the union bounding box (viewport CSS pixels) of the given
+   * selectors, clipped to the viewport. If nothing is visible, scrolls the
+   * first matching element into view and remeasures after a frame. The
+   * overlay/label are hidden first so they're never captured.
+   */
+  private async getRect(selectors: string[]): Promise<RectReply> {
+    const devicePixelRatio = window.devicePixelRatio;
+    const elements = selectors
+      .map((selector) => {
+        try {
+          return document.querySelector(selector);
+        } catch {
+          return null;
+        }
+      })
+      .filter((el): el is Element => el !== null);
+
+    if (elements.length === 0) {
+      return { rect: null, devicePixelRatio };
+    }
+
+    this.hideOverlay();
+
+    let rect = clipToViewport(unionRect(elements));
+    if (!rect) {
+      elements[0]!.scrollIntoView({ block: 'center' });
+      await nextAnimationFrame();
+      rect = clipToViewport(unionRect(elements));
+    }
+
+    return { rect, devicePixelRatio };
   }
 
   private ensureOverlay(): { box: HTMLDivElement; label: HTMLDivElement } {

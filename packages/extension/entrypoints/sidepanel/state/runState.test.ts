@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { FileDiff, OverrideProposal, RunRecord, ServerMessage } from '@vizion/shared';
+import type { FileDiff, OverrideProposal, RunRecord, Screenshot, ServerMessage } from '@vizion/shared';
 import { initialRunState, runReducer, type RunState } from './runState.js';
 
 const PAGE_KEY = 'https://example.com/page';
@@ -24,6 +24,7 @@ describe('runReducer', () => {
       pageKey: PAGE_KEY,
       proposal: null,
       proposalError: null,
+      screenshot: null,
     });
   });
 
@@ -206,6 +207,37 @@ describe('runReducer', () => {
     });
     state = runReducer(state, { type: 'clear' });
     expect(state.proposal).toBeNull();
+  });
+
+  it('set-screenshot stores the captured screenshot', () => {
+    const screenshot: Screenshot = { dataUrl: 'data:image/jpeg;base64,abc', width: 120, height: 80 };
+    let state = start();
+    state = runReducer(state, { type: 'set-screenshot', screenshot });
+    expect(state.screenshot).toEqual(screenshot);
+  });
+
+  it('set-screenshot with null removes a previously stored screenshot', () => {
+    const screenshot: Screenshot = { dataUrl: 'data:image/jpeg;base64,abc', width: 120, height: 80 };
+    let state = start();
+    state = runReducer(state, { type: 'set-screenshot', screenshot });
+    state = runReducer(state, { type: 'set-screenshot', screenshot: null });
+    expect(state.screenshot).toBeNull();
+  });
+
+  it('starting a new run clears a previous screenshot', () => {
+    const screenshot: Screenshot = { dataUrl: 'data:image/jpeg;base64,abc', width: 120, height: 80 };
+    let state = start();
+    state = runReducer(state, { type: 'set-screenshot', screenshot });
+    state = start(state);
+    expect(state.screenshot).toBeNull();
+  });
+
+  it('clear resets the screenshot', () => {
+    const screenshot: Screenshot = { dataUrl: 'data:image/jpeg;base64,abc', width: 120, height: 80 };
+    let state = start();
+    state = runReducer(state, { type: 'set-screenshot', screenshot });
+    state = runReducer(state, { type: 'clear' });
+    expect(state.screenshot).toBeNull();
   });
 
   it('clear-proposal clears only the proposal, leaving the rest of the state intact', () => {

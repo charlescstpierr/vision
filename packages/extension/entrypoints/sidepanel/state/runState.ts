@@ -1,4 +1,4 @@
-import type { AgentEvent, AgentKind, FileDiff, OverrideProposal, RunRecord, ServerMessage } from '@vizion/shared';
+import type { AgentEvent, AgentKind, FileDiff, OverrideProposal, RunRecord, Screenshot, ServerMessage } from '@vizion/shared';
 
 export interface RunState {
   running: boolean;
@@ -29,6 +29,8 @@ export interface RunState {
    * `clear`.
    */
   proposalError: string | null;
+  /** The capture attached to the current/last run, if any. Set from the panel once captured, reset on `start` / `clear`. */
+  screenshot: Screenshot | null;
 }
 
 export type RunAction =
@@ -36,7 +38,8 @@ export type RunAction =
   | { type: 'start'; agent: AgentKind; prompt: string; pageKey: string }
   | { type: 'clear' }
   | { type: 'clear-proposal' }
-  | { type: 'proposal-error'; message: string };
+  | { type: 'proposal-error'; message: string }
+  | { type: 'set-screenshot'; screenshot: Screenshot | null };
 
 export const initialRunState: RunState = {
   running: false,
@@ -51,6 +54,7 @@ export const initialRunState: RunState = {
   pageKey: null,
   proposal: null,
   proposalError: null,
+  screenshot: null,
 };
 
 export function runReducer(state: RunState, action: RunAction): RunState {
@@ -69,6 +73,7 @@ export function runReducer(state: RunState, action: RunAction): RunState {
         pageKey: action.pageKey,
         proposal: null,
         proposalError: null,
+        screenshot: null,
       };
     case 'clear':
       return initialRunState;
@@ -76,6 +81,8 @@ export function runReducer(state: RunState, action: RunAction): RunState {
       return { ...state, proposal: null, proposalError: null };
     case 'proposal-error':
       return { ...state, proposalError: action.message };
+    case 'set-screenshot':
+      return { ...state, screenshot: action.screenshot };
     case 'server': {
       const message = action.message;
       switch (message.type) {

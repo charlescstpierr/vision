@@ -1,6 +1,7 @@
 import { useEffect, useReducer, useRef, useState } from 'react';
-import type { AgentKind, ContentToPanelMessage, ElementContext, PanelToContentMessage } from '@vizion/shared';
+import type { AgentKind, ContentToPanelMessage, ElementContext, PanelToContentMessage, Screenshot } from '@vizion/shared';
 import { overrideKey } from '@vizion/shared';
+import { captureElementScreenshot } from '../../utils/screenshot.js';
 import ElementCard from './components/ElementCard.js';
 import RunPanel from './components/RunPanel.js';
 import AgentOutput from './components/AgentOutput.js';
@@ -24,6 +25,15 @@ async function sendToActiveTab(message: PanelToContentMessage): Promise<unknown>
   return chrome.tabs.sendMessage(tab.id, message);
 }
 
+/** `chrome.storage.local` key for the "Joindre une capture" checkbox, kept separate from `vizion:settings` so toggling it never touches the server connection settings. */
+const ATTACH_SCREENSHOT_STORAGE_KEY = 'vizion:settings.attachScreenshot';
+
+/** Strips the `captureElementScreenshot` "Capture impossible : " prefix so its reason can be reused in the panel's own notice wording. */
+function captureFailureReason(err: unknown): string {
+  const message = err instanceof Error ? err.message : String(err);
+  return message.replace(/^Capture impossible\s*:\s*/, '');
+}
+
 export default function App() {
   const { settings, save: saveSettings } = useSettings();
   const server = useVizionServer(settings);
@@ -34,8 +44,28 @@ export default function App() {
   const [run, dispatch] = useReducer(runReducer, initialRunState);
   const [prompt, setPrompt] = useState('');
   const promptRef = useRef<HTMLTextAreaElement>(null);
+  const [attachScreenshot, setAttachScreenshotState] = useState(true);
+  const [capturing, setCapturing] = useState(false);
 
   useEffect(() => server.subscribe((message) => dispatch({ type: 'server', message })), [server]);
+
+  // Load the persisted "Joindre une capture" preference once on mount.
+  useEffect(() => {
+    let cancelled = false;
+    void chrome.storage.local.get(ATTACH_SCREENSHOT_STORAGE_KEY).then((result) => {
+      if (cancelled) return;
+      const stored = result[ATTACH_SCREENSHOT_STORAGE_KEY];
+      if (typeof stored === 'boolean') setAttachScreenshotState(stored);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const setAttachScreenshot = (next: boolean) => {
+    setAttachScreenshotState(next);
+    void chrome.storage.local.set({ [ATTACH_SCREENSHOT_STORAGE_KEY]: next });
+  };
 
   // Clear the current selection when the active tab navigates elsewhere;
   // the run/diff state is left alone since it belongs to the agent run, not
@@ -101,9 +131,30 @@ export default function App() {
     }
   };
 
-  const runAgent = (agent: AgentKind, promptText: string) => {
+  const runAgent = async (agent: AgentKind, promptText: string) => {
     if (elements.length === 0 || !tabUrl) return;
+
+    let screenshot: Screenshot | null = null;
+    if (attachScreenshot) {
+      setCapturing(true);
+      setNotice(undefined);
+      try {
+        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        if (!tab?.id) throw new Error('onglet actif introuvable');
+        screenshot = await captureElementScreenshot(
+          tab.id,
+          tab.windowId,
+          elements.map((el) => el.selector),
+        );
+      } catch (err) {
+        setNotice(`Capture impossible, envoi sans image : ${captureFailureReason(err)}`);
+      } finally {
+        setCapturing(false);
+      }
+    }
+
     dispatch({ type: 'start', agent, prompt: promptText, pageKey: overrideKey(tabUrl) });
+    dispatch({ type: 'set-screenshot', screenshot });
     server.send({
       type: 'run',
       agent,
@@ -111,6 +162,7 @@ export default function App() {
       element: elements[0]!,
       elements,
       mode: isSourceMode ? 'source' : 'overlay',
+      ...(screenshot ? { screenshot } : {}),
     });
   };
 
@@ -222,6 +274,11 @@ export default function App() {
         undoNotice={run.undoNotice}
         error={run.error}
         onUndoRun={(id) => server.send({ type: 'undo-run', id })}
+        attachScreenshot={attachScreenshot}
+        onToggleAttachScreenshot={setAttachScreenshot}
+        capturing={capturing}
+        screenshot={run.screenshot}
+        onRemoveScreenshot={() => dispatch({ type: 'set-screenshot', screenshot: null })}
       />
 
       <AgentOutput events={run.events} />
