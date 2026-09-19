@@ -13,7 +13,7 @@ Modifie des sites web en direct depuis Microsoft Edge ou Chrome avec un agent de
 **Deux modes :**
 
 - **Mode Source** : Serveur démarré, page servie par ton serveur de dev (localhost). L'agent modifie les fichiers de ton projet, en trouvant le bon fichier source par le contexte.
-- **Mode Overlay** : Aucun serveur, ou n'importe quel site dont tu n'as pas le code source. Tes modifications rapides (texte, styles) sont enregistrées comme des overrides dans l'extension, par URL de page, et réappliquées à chaque chargement. Aucun agent n'est impliqué.
+- **Mode Overlay** : Aucun serveur, ou n'importe quel site dont tu n'as pas le code source. Tes modifications rapides (texte, styles) sont enregistrées comme des overrides dans l'extension, par URL de page, et réappliquées à chaque chargement. Sans serveur, aucun agent n'est impliqué ; avec le serveur démarré sur une page distante, l'agent peut proposer des overrides que tu appliques ou ignores.
 
 ## Prérequis
 
@@ -83,13 +83,14 @@ Il annote chaque élément hôte JSX (`div`, `button`, ...) avec un attribut `da
 ## Utilisation
 
 1. Ouvre le panneau latéral (clique sur l'icône de la barre d'outils).
-2. La ligne de statut affiche « Mode Source » (serveur + localhost) ou « Mode Overlay » (aucun serveur).
-3. Clique sur « Sélectionner un élément » et clique sur l'élément à modifier.
+2. La ligne de statut affiche « Mode Source » (serveur + page locale) ou « Mode Overlay » (aucun serveur, ou page distante).
+3. Clique sur « Sélectionner un élément » et clique sur l'élément à modifier. Pour en choisir plusieurs, fais Maj+clic dès le premier élément : le mode sélection reste actif tant que tu tiens Maj ; un clic simple sélectionne et quitte le mode (reclique sur « Sélectionner un élément » pour en ajouter ensuite).
 4. La carte d'élément affiche le sélecteur, le chemin DOM et les styles calculés.
-5. Modifications rapides : bouton « Modifier le texte », lignes couleur/taille/marge, ou écris une invite complète.
-6. Choisis un agent (Codex ou Claude), puis « Envoyer à l'agent ».
+5. Modifications rapides : bouton « Modifier le texte », lignes couleur/taille/marge, ou écris une invite complète. En mode Overlay, chaque modification devient un override ; « Annuler » / « Refaire » dans la section Historique.
+6. Choisis un agent (Codex ou Claude), coche « Joindre une capture de l'élément » si tu veux que l'agent voie le rendu (premier clic : capture mise en attente, second clic : envoi), puis « Envoyer à l'agent ».
 7. Regarde le résultat s'afficher en direct dans le panneau.
-8. Une fois terminé, révise le diff, clique sur « Accepter » ou « Rejeter ».
+8. En mode Source : révise le diff, clique sur « Accepter » ou « Rejeter ». Le dernier run accepté peut être annulé depuis l'Historique, tant que le serveur n'a pas redémarré et que les fichiers touchés n'ont pas été modifiés entre-temps (l'historique vit en mémoire et l'annulation refuse tout conflit).
+9. En mode Overlay avec le serveur allumé (site distant) : l'agent propose des overrides de styles ou de texte ; « Appliquer » les pose sur la page, « Ignorer » les écarte.
 
 ## Notes Windows et macOS
 
