@@ -2,6 +2,7 @@
   "name": "@charlescstpierr/vizion-babel-plugin-source",
   "version": "0.1.0",
   "private": false,
+  "license": "MIT",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -11,7 +12,7 @@
       "default": "./dist/index.js"
     }
   },
-  "files": ["dist"],
+  "files": ["LICENSE", "dist"],
   "publishConfig": {
     "access": "public"
   },

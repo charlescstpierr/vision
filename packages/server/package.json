@@ -3,13 +3,14 @@
   "version": "0.1.0",
   "description": "Local server for Vizion: pairs the Vizion browser extension with a coding agent (Claude or Codex) to edit your project's live pages.",
   "private": false,
+  "license": "MIT",
   "type": "module",
   "bin": {
     "vizion": "./dist/cli.js"
   },
   "main": "./dist/server.js",
   "types": "./dist/server.d.ts",
-  "files": ["dist", "README.md"],
+  "files": ["LICENSE", "dist", "README.md"],
   "engines": {
     "node": ">=22"
   },
