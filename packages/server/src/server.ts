@@ -1,3 +1,4 @@
+import { execFile } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import { createRequire } from 'node:module';
@@ -5,10 +6,14 @@ import http, { type IncomingMessage, type ServerResponse } from 'node:http';
 import type { Socket } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
+import { promisify } from 'node:util';
 import { WebSocketServer, type WebSocket } from 'ws';
-import type { AgentKind, AgentRunner, ClientMessage, ServerMessage } from '@vizion/shared';
+import type { AgentKind, AgentRunner, ClientMessage, FileDiff, ServerMessage } from '@vizion/shared';
+import { RunHistory } from './history.js';
 import { createRunners, detectAvailableAgents } from './runners/index.js';
 import { computeDiff, restoreSnapshot, takeSnapshot, type Snapshot } from './snapshot.js';
+
+const execFileAsync = promisify(execFile);
 
 const require = createRequire(import.meta.url);
 const pkg = require('../package.json') as { name: string; version: string };
@@ -60,6 +65,18 @@ function timingSafeEqualString(a: string, b: string): boolean {
   const bufB = Buffer.from(b);
   if (bufA.length !== bufB.length) return false;
   return crypto.timingSafeEqual(bufA, bufB);
+}
+
+/** True for the standalone `old mode`/`new mode` patches `computeDiff` emits for chmod-only changes. */
+function isModeOnlyPatch(patch: string): boolean {
+  return patch.startsWith('old mode ');
+}
+
+/** Extracts the permission bits from an `old mode NNNNNN` line, or null if absent. */
+function parseOldMode(patch: string): number | null {
+  const match = /^old mode (\d+)/m.exec(patch);
+  if (!match?.[1]) return null;
+  return parseInt(match[1], 8) & 0o777;
 }
 
 function isAllowedOrigin(origin: string | undefined, prefixes: string[]): boolean {
@@ -121,12 +138,28 @@ export function createServer(options: CreateServerOptions): VizionServer {
   // the socket that owns it aborts the agent process.
   let activeRun: { ws: WebSocket; controller: AbortController } | null = null;
 
+  // Accepted runs, kept so their diff can be undone later. Server-wide, like
+  // `activeRun`: the history is about the shared project, not a connection.
+  const history = new RunHistory();
+
   // The snapshot from the most recently *finished* run on a connection
   // (diff already sent), plus the paths it touched (what `reject` should
-  // restore). Set only once the diff has been sent, so its presence means
-  // "awaiting accept/reject", not "a run is in progress". Cleared on
-  // `accept`, `reject`, or socket close.
-  const pendingSnapshots = new Map<WebSocket, { snapshot: Snapshot; touchedPaths: string[] }>();
+  // restore), the diff itself (what `accept` stores into history) and the
+  // run's own metadata (agent/prompt/selectors, for the RunRecord). Set only
+  // once the diff has been sent, so its presence means "awaiting
+  // accept/reject", not "a run is in progress". Cleared on `accept`,
+  // `reject`, or socket close.
+  const pendingSnapshots = new Map<
+    WebSocket,
+    {
+      snapshot: Snapshot;
+      touchedPaths: string[];
+      files: FileDiff[];
+      agent: AgentKind;
+      prompt: string;
+      selectors: string[];
+    }
+  >();
 
   httpServer.on('upgrade', (req: IncomingMessage, socket: Socket, head: Buffer) => {
     const url = new URL(req.url ?? '', 'http://localhost');
@@ -176,6 +209,9 @@ export function createServer(options: CreateServerOptions): VizionServer {
         agent: message.agent,
         prompt: message.prompt,
         element: message.element,
+        // Carried through (untyped on `RunRequest` itself) so `buildPrompt`
+        // can describe every selected element when there is more than one.
+        elements: message.elements,
         pageUrl: message.element.pageUrl,
         cwd,
       };
@@ -190,7 +226,15 @@ export function createServer(options: CreateServerOptions): VizionServer {
         // Diff after the run finishes, whether it completed, errored, or was aborted.
         try {
           const files = await computeDiff(snapshot);
-          pendingSnapshots.set(ws, { snapshot, touchedPaths: files.map((file) => file.path) });
+          const selectors = (message.elements ?? [message.element]).map((el) => el.selector);
+          pendingSnapshots.set(ws, {
+            snapshot,
+            touchedPaths: files.map((file) => file.path),
+            files,
+            agent: message.agent,
+            prompt: message.prompt,
+            selectors,
+          });
           send(ws, { type: 'diff', files });
         } catch (diffErr) {
           send(ws, {
@@ -206,6 +250,96 @@ export function createServer(options: CreateServerOptions): VizionServer {
     }
   }
 
+  /**
+   * Reverses a previously accepted run's stored patches with `git apply -R`
+   * from the repository root. Only the most recent still-accepted run may
+   * be undone, since reverse patches are only guaranteed to apply cleanly
+   * in that order.
+   */
+  async function handleUndoRun(ws: WebSocket, id: string): Promise<void> {
+    if (activeRun || pendingSnapshots.size > 0) {
+      send(ws, { type: 'error', message: "Termine le run en cours d'abord." });
+      return;
+    }
+    const entry = history.get(id);
+    if (!entry) {
+      send(ws, { type: 'error', message: 'Run introuvable.' });
+      return;
+    }
+    if (entry.record.status === 'undone') {
+      send(ws, { type: 'error', message: 'Ce run a déjà été annulé.' });
+      return;
+    }
+    const mostRecentAccepted = history.list().find((run) => run.status === 'accepted');
+    if (mostRecentAccepted?.id !== id) {
+      send(ws, { type: 'error', message: "Annule d'abord les runs plus récents." });
+      return;
+    }
+
+    try {
+      const { stdout } = await execFileAsync('git', ['rev-parse', '--show-toplevel'], { cwd });
+      const root = stdout.trim();
+
+      const textPatches = entry.patches.filter((patch) => !isModeOnlyPatch(patch.patch));
+      if (textPatches.length > 0) {
+        // The patches are plain before/after content diffs (see snapshot.ts's
+        // diffOnePath), with no "new file"/"deleted file" header: `git apply
+        // -R` matches hunks against the file that's currently on disk, so a
+        // file the run deleted needs an empty placeholder to rewrite into
+        // place, and it can't be trusted to remove a file the run added
+        // (it only empties its content) — handled explicitly below instead.
+        for (const patch of textPatches) {
+          if (patch.status === 'deleted') {
+            const abs = path.join(root, patch.path);
+            await fs.mkdir(path.dirname(abs), { recursive: true });
+            await fs.writeFile(abs, '');
+          }
+        }
+
+        const combined = textPatches.map((patch) => patch.patch).join('');
+        const tmpFile = path.join(os.tmpdir(), `vizion-undo-${crypto.randomUUID()}.patch`);
+        await fs.writeFile(tmpFile, combined);
+        try {
+          await execFileAsync(
+            'git',
+            ['apply', '-R', '--whitespace=nowarn', '--recount', tmpFile],
+            { cwd: root },
+          );
+        } finally {
+          await fs.rm(tmpFile, { force: true });
+        }
+
+        for (const patch of textPatches) {
+          if (patch.status === 'added') {
+            await fs.rm(path.join(root, patch.path), { force: true });
+          }
+        }
+      }
+
+      const modePatches = entry.patches.filter((patch) => isModeOnlyPatch(patch.patch));
+      for (const patch of modePatches) {
+        const oldMode = parseOldMode(patch.patch);
+        if (oldMode !== null) {
+          await fs.chmod(path.join(root, patch.path), oldMode);
+        }
+      }
+
+      history.markUndone(id);
+      send(ws, { type: 'run-undone', id, files: entry.record.files });
+      send(ws, { type: 'history', runs: history.list() });
+    } catch (err) {
+      const execErr = err as { stderr?: string; message?: string };
+      const firstLine = execErr.stderr
+        ?.split('\n')
+        .map((line) => line.trim())
+        .find((line) => line.length > 0);
+      send(ws, {
+        type: 'error',
+        message: `Échec de l'annulation du run : ${firstLine ?? execErr.message ?? 'erreur inconnue'}`,
+      });
+    }
+  }
+
   async function handleClientMessage(ws: WebSocket, message: ClientMessage): Promise<void> {
     try {
       switch (message.type) {
@@ -213,11 +347,25 @@ export function createServer(options: CreateServerOptions): VizionServer {
           send(ws, { type: 'pong' });
           return;
         case 'accept': {
-          if (!pendingSnapshots.delete(ws)) {
+          const pending = pendingSnapshots.get(ws);
+          if (!pending) {
             send(ws, { type: 'error', message: 'rien à accepter ou rejeter' });
             return;
           }
+          pendingSnapshots.delete(ws);
+          history.add(
+            {
+              agent: pending.agent,
+              prompt: pending.prompt,
+              selectors: pending.selectors,
+              createdAt: Date.now(),
+              files: pending.files.map((file) => file.path),
+              status: 'accepted',
+            },
+            pending.files,
+          );
           send(ws, { type: 'diff', files: [] });
+          send(ws, { type: 'history', runs: history.list() });
           return;
         }
         case 'reject': {
@@ -241,6 +389,12 @@ export function createServer(options: CreateServerOptions): VizionServer {
         case 'run':
           await handleRun(ws, message);
           return;
+        case 'undo-run':
+          await handleUndoRun(ws, message.id);
+          return;
+        case 'list-history':
+          send(ws, { type: 'history', runs: history.list() });
+          return;
         default:
           send(ws, { type: 'error', message: 'type de message inconnu' });
       }
@@ -251,6 +405,7 @@ export function createServer(options: CreateServerOptions): VizionServer {
 
   wss.on('connection', (ws: WebSocket) => {
     send(ws, { type: 'hello', version: pkg.version, cwd, agents: detectedAgents });
+    send(ws, { type: 'history', runs: history.list() });
 
     ws.on('message', (data: Buffer) => {
       let message: ClientMessage;
