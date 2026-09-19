@@ -1,0 +1,21 @@
+{
+  "name": "vizion",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "pnpm -r build",
+    "test": "pnpm -r test",
+    "lint": "pnpm -r lint",
+    "typecheck": "pnpm -r typecheck",
+    "test:e2e": "pnpm --filter \"@vizion/extension...\" build && pnpm --filter @vizion/e2e e2e"
+  },
+  "devDependencies": {
+    "eslint": "^9.0.0",
+    "typescript": "^5.6.0",
+    "typescript-eslint": "^8.0.0"
+  }
+}

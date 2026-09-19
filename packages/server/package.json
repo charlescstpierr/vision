@@ -1,0 +1,41 @@
+{
+  "name": "@charlescstpierr/vizion",
+  "version": "0.1.0",
+  "description": "Local server for Vizion: pairs the Vizion browser extension with a coding agent (Claude or Codex) to edit your project's live pages.",
+  "private": false,
+  "type": "module",
+  "bin": {
+    "vizion": "./dist/cli.js"
+  },
+  "main": "./dist/server.js",
+  "types": "./dist/server.d.ts",
+  "files": ["dist", "README.md"],
+  "engines": {
+    "node": ">=22"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/charlescstpierr/vision",
+    "directory": "packages/server"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsup",
+    "test": "vitest run",
+    "lint": "eslint src",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/ws": "^8.18.0",
+    "@vizion/shared": "workspace:*",
+    "tsup": "^8.3.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  }
+}
