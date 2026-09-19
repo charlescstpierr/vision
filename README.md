@@ -60,6 +60,24 @@ npx @charlescstpierr/vizion
 
 The server prints detected agents and binds to `127.0.0.1` only, accepting WebSocket connections from the extension.
 
+## Help the agent find the file (optional)
+
+In a Vite + React project, add the plugin to `vite.config.ts` (dev only, guarded by `command`):
+
+```ts
+export default defineConfig(({ command }) => ({
+  plugins: [react({ babel: { plugins: command === 'serve' ? ['@vizion/babel-plugin-source'] : [] } })],
+}));
+```
+
+Install it as a dev dependency:
+
+```sh
+npm i -D @vizion/babel-plugin-source
+```
+
+It annotates every JSX host element (`div`, `button`, ...) with a `data-vizion-source="file:line:column"` attribute. Vizion reads it from the selected element (or its nearest annotated ancestor) and passes it to the agent, so it starts at the right file instead of guessing from the DOM.
+
 ## Use it
 
 1. Open the side panel (click the toolbar icon).

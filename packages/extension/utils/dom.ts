@@ -19,6 +19,7 @@ const COMPUTED_STYLE_KEYS = [
 
 const OUTER_HTML_LIMIT = 2000;
 const TEXT_CONTENT_LIMIT = 300;
+const SOURCE_ATTRIBUTE = 'data-vizion-source';
 
 function isUniqueId(doc: Document, id: string): boolean {
   return doc.querySelectorAll(`#${CSS.escape(id)}`).length === 1;
@@ -119,6 +120,16 @@ function truncate(text: string, limit: number): string {
 }
 
 /**
+ * Reads the `data-vizion-source` build annotation from `el`, or from the
+ * closest ancestor that carries one, when `el` itself does not (e.g. a
+ * click landed on a plain-text node's parent that a component wraps).
+ */
+function findSourceLocation(el: Element): string | undefined {
+  const annotated = el.closest(`[${SOURCE_ATTRIBUTE}]`);
+  return annotated?.getAttribute(SOURCE_ATTRIBUTE) ?? undefined;
+}
+
+/**
  * Extracts a full ElementContext snapshot for `el`.
  */
 export function extractElementContext(el: Element, pageUrl: string): ElementContext {
@@ -135,6 +146,7 @@ export function extractElementContext(el: Element, pageUrl: string): ElementCont
   const collapsedText = rawText.trim().replace(/\s+/g, ' ');
 
   const rect = el.getBoundingClientRect();
+  const sourceLocation = findSourceLocation(el);
 
   return {
     selector: buildUniqueSelector(el),
@@ -147,5 +159,6 @@ export function extractElementContext(el: Element, pageUrl: string): ElementCont
     rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
     computedStyles,
     pageUrl,
+    ...(sourceLocation ? { sourceLocation } : {}),
   };
 }

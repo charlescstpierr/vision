@@ -21,6 +21,9 @@ export function buildPrompt(req: RunRequest, cwd: string): string {
     `Project: ${cwd}.`,
     `Page: ${pageUrl}.`,
     `Selected element: ${element.selector}.`,
+    ...(element.sourceLocation
+      ? [`Source location (from build annotation): ${element.sourceLocation}. Start there.`]
+      : []),
     `DOM path: ${domPath}.`,
     `Classes: ${classes}.`,
     `Text: "${element.textContent}".`,

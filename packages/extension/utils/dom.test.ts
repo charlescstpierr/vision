@@ -110,6 +110,27 @@ describe('extractElementContext', () => {
     expect(ctx.rect).toHaveProperty('width');
   });
 
+  it('sets sourceLocation from the element\'s own data-vizion-source attribute', () => {
+    setBody('<div id="root"><button id="btn" data-vizion-source="src/App.tsx:3:5">Go</button></div>');
+    const btn = document.getElementById('btn')!;
+    const ctx = extractElementContext(btn, 'https://example.com');
+    expect(ctx.sourceLocation).toBe('src/App.tsx:3:5');
+  });
+
+  it('sets sourceLocation from the nearest annotated ancestor when the element has none', () => {
+    setBody('<div id="wrap" data-vizion-source="src/App.tsx:2:1"><span id="inner">hi</span></div>');
+    const inner = document.getElementById('inner')!;
+    const ctx = extractElementContext(inner, 'https://example.com');
+    expect(ctx.sourceLocation).toBe('src/App.tsx:2:1');
+  });
+
+  it('leaves sourceLocation undefined when no annotation is present', () => {
+    setBody('<div id="plain">hi</div>');
+    const el = document.getElementById('plain')!;
+    const ctx = extractElementContext(el, 'https://example.com');
+    expect(ctx.sourceLocation).toBeUndefined();
+  });
+
   it('only includes the whitelisted computed style keys', () => {
     setBody('<div id="styled">x</div>');
     const el = document.getElementById('styled')!;

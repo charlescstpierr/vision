@@ -47,6 +47,22 @@ describe('buildPrompt', () => {
     expect(prompt).toContain('Classes: (none).');
   });
 
+  it('adds the source location line right after the selected element line when present', () => {
+    const req = makeRequest({ sourceLocation: 'src/App.tsx:3:5' });
+    const prompt = buildPrompt(req, '/tmp/proj');
+    const lines = prompt.split('\n');
+    const selectedIndex = lines.findIndex((line) => line.startsWith('Selected element:'));
+    expect(lines[selectedIndex + 1]).toBe(
+      'Source location (from build annotation): src/App.tsx:3:5. Start there.',
+    );
+  });
+
+  it('omits the source location line when not present', () => {
+    const req = makeRequest();
+    const prompt = buildPrompt(req, '/tmp/proj');
+    expect(prompt).not.toContain('Source location');
+  });
+
   it('truncates a very long outerHtml', () => {
     const longHtml = `<div>${'x'.repeat(3000)}</div>`;
     const req = makeRequest({ outerHtml: longHtml });

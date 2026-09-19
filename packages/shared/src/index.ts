@@ -15,6 +15,8 @@ export interface ElementContext {
   rect: { x: number; y: number; width: number; height: number };
   computedStyles: Record<string, string>;
   pageUrl: string;
+  /** `file:line:column` from a `data-vizion-source` build annotation, when present. */
+  sourceLocation?: string;
 }
 
 export type AgentKind = 'codex' | 'claude';
