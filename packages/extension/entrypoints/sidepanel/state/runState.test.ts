@@ -25,6 +25,7 @@ describe('runReducer', () => {
       proposal: null,
       proposalError: null,
       screenshot: null,
+      screenshotSent: true,
     });
   });
 
@@ -224,20 +225,46 @@ describe('runReducer', () => {
     expect(state.screenshot).toBeNull();
   });
 
-  it('starting a new run clears a previous screenshot', () => {
+  it('starting a new run keeps a staged screenshot and marks it sent', () => {
+    const screenshot: Screenshot = { dataUrl: 'data:image/jpeg;base64,abc', width: 120, height: 80 };
+    let state = start();
+    state = runReducer(state, { type: 'set-screenshot', screenshot });
+    expect(state.screenshotSent).toBe(false);
+    state = start(state);
+    expect(state.screenshot).toEqual(screenshot);
+    expect(state.screenshotSent).toBe(true);
+  });
+
+  it('set-screenshot resets screenshotSent to false', () => {
+    let state = start();
+    expect(state.screenshotSent).toBe(true);
+    state = runReducer(state, { type: 'set-screenshot', screenshot: null });
+    expect(state.screenshotSent).toBe(false);
+  });
+
+  it('clear resets the screenshot and screenshotSent', () => {
     const screenshot: Screenshot = { dataUrl: 'data:image/jpeg;base64,abc', width: 120, height: 80 };
     let state = start();
     state = runReducer(state, { type: 'set-screenshot', screenshot });
     state = start(state);
+    state = runReducer(state, { type: 'clear' });
     expect(state.screenshot).toBeNull();
+    expect(state.screenshotSent).toBe(false);
   });
 
-  it('clear resets the screenshot', () => {
+  it('send-failed stops the run and reports the connection loss in French', () => {
+    let state = start();
+    state = runReducer(state, { type: 'send-failed' });
+    expect(state.running).toBe(false);
+    expect(state.error).toBe('Connexion au serveur perdue, run non envoyé.');
+  });
+
+  it('send-failed leaves a staged screenshot untouched', () => {
     const screenshot: Screenshot = { dataUrl: 'data:image/jpeg;base64,abc', width: 120, height: 80 };
     let state = start();
     state = runReducer(state, { type: 'set-screenshot', screenshot });
-    state = runReducer(state, { type: 'clear' });
-    expect(state.screenshot).toBeNull();
+    state = runReducer(state, { type: 'send-failed' });
+    expect(state.screenshot).toEqual(screenshot);
   });
 
   it('clear-proposal clears only the proposal, leaving the rest of the state intact', () => {

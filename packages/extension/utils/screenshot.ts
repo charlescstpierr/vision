@@ -63,6 +63,22 @@ function reasonOf(err: unknown): string {
 }
 
 /**
+ * Guards against the active tab changing out from under a capture (the user
+ * switched tabs while `captureVisibleTab` was in flight, say). Pure so it can
+ * be tested without mocking `chrome.tabs`.
+ */
+export function assertSameTab(expectedId: number, activeId: number | undefined): void {
+  if (activeId !== expectedId) {
+    throw new Error("Capture impossible : l'onglet actif a changé.");
+  }
+}
+
+async function activeTabId(windowId: number): Promise<number | undefined> {
+  const [tab] = await chrome.tabs.query({ active: true, windowId });
+  return tab?.id;
+}
+
+/**
  * Captures the visible tab, crops it to the selected element(s) — as
  * measured by the content script via `vizion:get-rect` — and downscales the
  * result for attaching to a run. Every failure throws a French `Error`
@@ -87,12 +103,16 @@ export async function captureElementScreenshot(
     throw new Error('Capture impossible : élément hors de la zone visible');
   }
 
+  assertSameTab(tabId, await activeTabId(windowId));
+
   let dataUrl: string;
   try {
     dataUrl = await chrome.tabs.captureVisibleTab(windowId, { format: 'png' });
   } catch (err) {
     throw new Error(`Capture impossible : ${reasonOf(err)}`);
   }
+
+  assertSameTab(tabId, await activeTabId(windowId));
 
   let bitmap: ImageBitmap;
   try {

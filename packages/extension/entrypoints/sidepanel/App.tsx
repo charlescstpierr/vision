@@ -46,6 +46,10 @@ export default function App() {
   const promptRef = useRef<HTMLTextAreaElement>(null);
   const [attachScreenshot, setAttachScreenshotState] = useState(true);
   const [capturing, setCapturing] = useState(false);
+  // True once the user has explicitly removed a staged capture ("Retirer")
+  // without having sent it yet — distinguishes "Envoyer sans capture" from
+  // the initial "Envoyer à l'agent" (no capture attempted yet).
+  const [screenshotDismissed, setScreenshotDismissed] = useState(false);
 
   useEffect(() => server.subscribe((message) => dispatch({ type: 'server', message })), [server]);
 
@@ -72,6 +76,7 @@ export default function App() {
   // to whichever element happened to be selected.
   useEffect(() => {
     setElements([]);
+    setScreenshotDismissed(false);
   }, [tabUrl]);
 
   // Fetch the agent run history as soon as the server says hello (on
@@ -84,6 +89,19 @@ export default function App() {
       server.send({ type: 'list-history' });
     }
   }, [server.hello]);
+
+  // A capture only counts as staged until it has been sent with a run; a
+  // capture from a previous run is never reused silently.
+  const stagedScreenshot = run.screenshot && !run.screenshotSent ? run.screenshot : null;
+
+  // Drives the "Envoyer..." button's label through the stage → send flow.
+  const sendLabel = capturing
+    ? 'Capture en cours...'
+    : attachScreenshot && stagedScreenshot
+      ? 'Envoyer avec la capture'
+      : attachScreenshot && screenshotDismissed
+        ? 'Envoyer sans capture'
+        : "Envoyer à l'agent";
 
   const connected = server.status === 'connected';
   // Source mode requires both a live server connection and a local page:
@@ -131,31 +149,55 @@ export default function App() {
     }
   };
 
+  /** Captures the selected element(s) and stages the result as `run.screenshot` (not sent yet). */
+  const captureAndStage = async (): Promise<Screenshot | null> => {
+    setCapturing(true);
+    setNotice(undefined);
+    try {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (!tab?.id) throw new Error('onglet actif introuvable');
+      const screenshot = await captureElementScreenshot(
+        tab.id,
+        tab.windowId,
+        elements.map((el) => el.selector),
+      );
+      dispatch({ type: 'set-screenshot', screenshot });
+      setScreenshotDismissed(false);
+      return screenshot;
+    } catch (err) {
+      setNotice(`Capture impossible, envoi sans image : ${captureFailureReason(err)}`);
+      return null;
+    } finally {
+      setCapturing(false);
+    }
+  };
+
+  const removeStagedScreenshot = () => {
+    dispatch({ type: 'set-screenshot', screenshot: null });
+    setScreenshotDismissed(true);
+  };
+
+  const retakeScreenshot = () => {
+    void captureAndStage();
+  };
+
+  // First click (checkbox on, nothing staged yet): captures and stages the
+  // screenshot, then stops — the button relabels to prompt a second click.
+  // Any other click actually starts and sends the run, attaching whatever
+  // is staged (if the checkbox is on).
   const runAgent = async (agent: AgentKind, promptText: string) => {
     if (elements.length === 0 || !tabUrl) return;
 
-    let screenshot: Screenshot | null = null;
-    if (attachScreenshot) {
-      setCapturing(true);
-      setNotice(undefined);
-      try {
-        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-        if (!tab?.id) throw new Error('onglet actif introuvable');
-        screenshot = await captureElementScreenshot(
-          tab.id,
-          tab.windowId,
-          elements.map((el) => el.selector),
-        );
-      } catch (err) {
-        setNotice(`Capture impossible, envoi sans image : ${captureFailureReason(err)}`);
-      } finally {
-        setCapturing(false);
-      }
+    if (attachScreenshot && !stagedScreenshot) {
+      const captured = await captureAndStage();
+      if (captured) return;
+      // Capture failed: fall through and send this click without an image,
+      // as before, instead of forcing a third click.
     }
 
+    const screenshot = attachScreenshot ? stagedScreenshot : null;
     dispatch({ type: 'start', agent, prompt: promptText, pageKey: overrideKey(tabUrl) });
-    dispatch({ type: 'set-screenshot', screenshot });
-    server.send({
+    const sent = server.send({
       type: 'run',
       agent,
       prompt: promptText,
@@ -164,6 +206,9 @@ export default function App() {
       mode: isSourceMode ? 'source' : 'overlay',
       ...(screenshot ? { screenshot } : {}),
     });
+    if (!sent) {
+      dispatch({ type: 'send-failed' });
+    }
   };
 
   const applyProposal = async () => {
@@ -278,7 +323,11 @@ export default function App() {
         onToggleAttachScreenshot={setAttachScreenshot}
         capturing={capturing}
         screenshot={run.screenshot}
-        onRemoveScreenshot={() => dispatch({ type: 'set-screenshot', screenshot: null })}
+        screenshotSent={run.screenshotSent}
+        screenshotDismissed={screenshotDismissed}
+        sendLabel={sendLabel}
+        onRemoveScreenshot={removeStagedScreenshot}
+        onRetakeScreenshot={retakeScreenshot}
       />
 
       <AgentOutput events={run.events} />

@@ -21,8 +21,16 @@ type Props = {
   onToggleAttachScreenshot: (next: boolean) => void;
   /** True while `runAgent` is capturing the tab, before the run is actually sent. */
   capturing: boolean;
+  /** The staged (not yet sent) or sent capture, if any. */
   screenshot: Screenshot | null;
+  /** True once `screenshot` has actually been sent with a run. */
+  screenshotSent: boolean;
+  /** True once the user removed a staged capture ("Retirer") without sending it. */
+  screenshotDismissed: boolean;
+  /** Label for the send button, reflecting the stage → send flow (see App.tsx). */
+  sendLabel: string;
   onRemoveScreenshot: () => void;
+  onRetakeScreenshot: () => void;
 };
 
 const PROMPT_PREVIEW_LIMIT = 60;
@@ -61,7 +69,11 @@ export default function RunPanel({
   onToggleAttachScreenshot,
   capturing,
   screenshot,
+  screenshotSent,
+  screenshotDismissed,
+  sendLabel,
   onRemoveScreenshot,
+  onRetakeScreenshot,
 }: Props) {
   const [agent, setAgent] = useState<AgentKind | ''>(agents[0] ?? '');
 
@@ -157,21 +169,39 @@ export default function RunPanel({
             <div>
               {screenshot.width}×{screenshot.height}px
             </div>
-            <a
-              href="#"
-              onClick={(e) => {
-                e.preventDefault();
-                onRemoveScreenshot();
-              }}
-            >
-              Retirer
-            </a>
+            {screenshotSent ? (
+              <div>Envoyée avec le run</div>
+            ) : (
+              <a
+                href="#"
+                onClick={(e) => {
+                  e.preventDefault();
+                  onRemoveScreenshot();
+                }}
+              >
+                Retirer
+              </a>
+            )}
           </div>
         </div>
       )}
 
+      {!screenshot && screenshotDismissed && (
+        <p style={{ fontSize: 12, marginTop: 8 }}>
+          <a
+            href="#"
+            onClick={(e) => {
+              e.preventDefault();
+              onRetakeScreenshot();
+            }}
+          >
+            Reprendre la capture
+          </a>
+        </p>
+      )}
+
       <button style={{ marginTop: 8 }} disabled={!canSend} onClick={submit}>
-        {capturing ? 'Capture en cours...' : "Envoyer à l'agent"}
+        {sendLabel}
       </button>
 
       <div style={{ marginTop: 16, borderTop: '1px solid #eee', paddingTop: 10 }}>

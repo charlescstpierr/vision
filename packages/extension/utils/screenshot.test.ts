@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { computeCrop, computeTargetSize } from './screenshot.js';
+import { assertSameTab, computeCrop, computeTargetSize } from './screenshot.js';
 
 describe('computeCrop', () => {
   it('scales the rect by dpr 1 and pads every side', () => {
@@ -55,5 +55,19 @@ describe('computeTargetSize', () => {
 
   it('uses a default maxSide of 800 when omitted', () => {
     expect(computeTargetSize(1000, 500)).toEqual({ width: 800, height: 400 });
+  });
+});
+
+describe('assertSameTab', () => {
+  it('does not throw when the active tab still matches', () => {
+    expect(() => assertSameTab(7, 7)).not.toThrow();
+  });
+
+  it('throws a French error when the active tab id differs', () => {
+    expect(() => assertSameTab(7, 8)).toThrow("Capture impossible : l'onglet actif a changé.");
+  });
+
+  it('throws when the active tab id is undefined', () => {
+    expect(() => assertSameTab(7, undefined)).toThrow("Capture impossible : l'onglet actif a changé.");
   });
 });

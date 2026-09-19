@@ -1,38 +1,31 @@
 import type { ContentToPanelMessage, PanelToContentMessage, RectReply } from '@vizion/shared';
 import { extractElementContext } from './dom.js';
 import { InlineEditor } from './inline-editor.js';
+import { unionVisibleRects } from './rects.js';
 
 const HIGHLIGHT_COLOR = '#2f6bff';
 
-type Rect = { x: number; y: number; width: number; height: number };
-
-function unionRect(elements: Element[]): Rect {
-  let left = Infinity;
-  let top = Infinity;
-  let right = -Infinity;
-  let bottom = -Infinity;
-  for (const el of elements) {
-    const r = el.getBoundingClientRect();
-    left = Math.min(left, r.left);
-    top = Math.min(top, r.top);
-    right = Math.max(right, r.right);
-    bottom = Math.max(bottom, r.bottom);
-  }
-  return { x: left, y: top, width: right - left, height: bottom - top };
-}
-
-/** Clips a viewport-relative rect to the visible viewport; `null` if nothing is left. */
-function clipToViewport(rect: Rect): Rect | null {
-  const left = Math.max(rect.x, 0);
-  const top = Math.max(rect.y, 0);
-  const right = Math.min(rect.x + rect.width, window.innerWidth);
-  const bottom = Math.min(rect.y + rect.height, window.innerHeight);
-  if (right <= left || bottom <= top) return null;
-  return { x: left, y: top, width: right - left, height: bottom - top };
-}
-
 function nextAnimationFrame(): Promise<void> {
   return new Promise((resolve) => requestAnimationFrame(() => resolve()));
+}
+
+/**
+ * Waits at least two animation frames after a scroll (e.g. `scrollIntoView`)
+ * before measuring, then keeps waiting — up to `maxMs` — for as long as
+ * `scrollX`/`scrollY` are still changing frame to frame, to ride out smooth
+ * or inertial scrolling before the caller measures element rects.
+ */
+async function waitForScrollSettle(maxMs = 500): Promise<void> {
+  const deadline = Date.now() + maxMs;
+  await nextAnimationFrame();
+  let prevX = window.scrollX;
+  let prevY = window.scrollY;
+  await nextAnimationFrame();
+  while ((window.scrollX !== prevX || window.scrollY !== prevY) && Date.now() < deadline) {
+    prevX = window.scrollX;
+    prevY = window.scrollY;
+    await nextAnimationFrame();
+  }
 }
 
 /**
@@ -75,9 +68,12 @@ export class SelectorOverlay {
 
   /**
    * Computes the union bounding box (viewport CSS pixels) of the given
-   * selectors, clipped to the viewport. If nothing is visible, scrolls the
-   * first matching element into view and remeasures after a frame. The
-   * overlay/label are hidden first so they're never captured.
+   * selectors. Each element's rect is clipped to the viewport individually
+   * and empty ones are dropped before unioning, so an element that's mostly
+   * off-screen doesn't drag the box past the edge of what's actually
+   * visible. If none is visible, scrolls the first matching element into
+   * view, waits for scrolling to settle, and remeasures. The overlay/label
+   * are hidden first so they're never captured.
    */
   private async getRect(selectors: string[]): Promise<RectReply> {
     const devicePixelRatio = window.devicePixelRatio;
@@ -97,11 +93,12 @@ export class SelectorOverlay {
 
     this.hideOverlay();
 
-    let rect = clipToViewport(unionRect(elements));
+    const measure = () => elements.map((el) => el.getBoundingClientRect());
+    let rect = unionVisibleRects(measure(), window.innerWidth, window.innerHeight);
     if (!rect) {
-      elements[0]!.scrollIntoView({ block: 'center' });
-      await nextAnimationFrame();
-      rect = clipToViewport(unionRect(elements));
+      elements[0]!.scrollIntoView({ block: 'center', behavior: 'instant' });
+      await waitForScrollSettle();
+      rect = unionVisibleRects(measure(), window.innerWidth, window.innerHeight);
     }
 
     return { rect, devicePixelRatio };
