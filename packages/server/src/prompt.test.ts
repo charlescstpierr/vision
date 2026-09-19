@@ -139,4 +139,15 @@ describe('buildOverlayPrompt', () => {
     expect(prompt).toContain('"#app > button.primary"');
     expect(prompt).toContain('".card__title"');
   });
+
+  it('JSON-escapes a selector containing backslashes and quotes so it round-trips', () => {
+    // e.g. CSS.escape('123') === '\\31 23', used as `#\31 23`.
+    const trickySelector = String.raw`#\31 23`;
+    const req = makeRequest({ selector: trickySelector });
+    const prompt = buildOverlayPrompt(req, '/tmp/proj');
+
+    const encoded = JSON.stringify(trickySelector);
+    expect(prompt).toContain(encoded);
+    expect(JSON.parse(encoded)).toBe(trickySelector);
+  });
 });

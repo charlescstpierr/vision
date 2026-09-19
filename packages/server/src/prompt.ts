@@ -74,7 +74,10 @@ export function buildOverlayPrompt(req: RunRequest & { elements?: ElementContext
   const { element, pageUrl, prompt, elements } = req;
   const list = elements && elements.length > 1 ? elements : [element];
   const selectors = list.map((el) => el.selector);
-  const selectorList = selectors.map((selector) => `"${selector}"`).join(', ');
+  // JSON.stringify (not manual quoting) so a selector containing backslashes
+  // or quotes (e.g. `#\31 23` from CSS.escape) round-trips as a valid JSON
+  // string in the prompt the agent is told to copy back verbatim.
+  const selectorList = selectors.map((selector) => JSON.stringify(selector)).join(', ');
 
   const descriptionLines =
     list.length > 1

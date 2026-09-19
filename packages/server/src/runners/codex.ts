@@ -96,6 +96,18 @@ export function parseCodexLine(line: string): AgentEvent[] {
   return [];
 }
 
+/**
+ * Builds the `codex exec` argv (minus the leading `exec --json`). Overlay
+ * mode runs in a throwaway directory and must not touch it, so it uses a
+ * read-only sandbox instead of `--full-auto` — and since that directory is
+ * also a fresh, non-git temp dir, `--skip-git-repo-check` is required too,
+ * or codex refuses to run at all ("Not inside a trusted directory").
+ */
+export function buildCodexArgs(cwd: string, readOnly: boolean | undefined): string[] {
+  const autoArgs = readOnly ? ['--sandbox', 'read-only', '--skip-git-repo-check'] : ['--full-auto'];
+  return ['exec', '--json', ...autoArgs, '-C', cwd, '-'];
+}
+
 export class CodexRunner implements AgentRunner {
   readonly kind = 'codex' as const;
 
@@ -109,13 +121,10 @@ export class CodexRunner implements AgentRunner {
   ): AsyncIterable<AgentEvent> {
     const prompt = req.mode === 'overlay' ? buildOverlayPrompt(req, req.cwd) : buildPrompt(req, req.cwd);
     // Per the documented `codex exec` interface: --json for JSONL output,
-    // --full-auto so file edits aren't blocked on an interactive approval
-    // (the diff accept/reject flow is the real gate), -C to set the project
-    // directory, and a trailing `-` positional prompt so codex reads the
-    // task from stdin instead of argv. Overlay mode runs in a throwaway
-    // directory and must not touch it, so use a read-only sandbox instead.
-    const autoArgs = req.readOnly ? ['--sandbox', 'read-only'] : ['--full-auto'];
-    const args = ['exec', '--json', ...autoArgs, '-C', req.cwd, '-'];
+    // -C to set the project directory, and a trailing `-` positional prompt
+    // so codex reads the task from stdin instead of argv (see
+    // buildCodexArgs for the auto/sandbox flags).
+    const args = buildCodexArgs(req.cwd, req.readOnly);
 
     let sawDone = false;
     let stderrText = '';
