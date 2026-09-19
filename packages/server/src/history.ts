@@ -137,12 +137,21 @@ export class RunHistory {
           after: file.after ? { mode: file.after.mode } : null,
         })),
       };
+      // 0600 like `run.json`: these blobs are verbatim copies of the user's
+      // project files, so they deserve the same protection as the metadata.
       await Promise.all(
         files.flatMap((file, index) => [
-          ...(file.before ? [fs.writeFile(path.join(runDir, `${index}.before`), file.before.content)] : []),
-          ...(file.after ? [fs.writeFile(path.join(runDir, `${index}.after`), file.after.content)] : []),
+          ...(file.before
+            ? [fs.writeFile(path.join(runDir, `${index}.before`), file.before.content, { mode: 0o600 })]
+            : []),
+          ...(file.after
+            ? [fs.writeFile(path.join(runDir, `${index}.after`), file.after.content, { mode: 0o600 })]
+            : []),
         ]),
       );
+      // Written last, so it is the commit point: a crash before this leaves a
+      // directory with no `run.json`, which `open` skips rather than reading
+      // half a run back.
       await fs.writeFile(path.join(runDir, 'run.json'), JSON.stringify(stored), { mode: 0o600 });
     } catch {
       await fs.rm(runDir, { recursive: true, force: true }).catch(() => {});

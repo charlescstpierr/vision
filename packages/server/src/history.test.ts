@@ -158,3 +158,33 @@ describe('RunHistory', () => {
     expect(history.list()).toEqual([]);
   });
 });
+
+describe('RunHistory on-disk layout', () => {
+  it('keeps the stored contents readable only by the user', async () => {
+    if (process.platform === 'win32') return;
+    const history = await RunHistory.open(PROJECT, root);
+    await history.add(record('modes'), [undoFile('a.ts', 'secret\n', 'also secret\n')]);
+
+    const projectRoot = path.join(root, (await fs.readdir(root))[0]!);
+    const runDir = path.join(projectRoot, (await fs.readdir(projectRoot))[0]!);
+    expect((await fs.stat(projectRoot)).mode & 0o777).toBe(0o700);
+    for (const name of await fs.readdir(runDir)) {
+      // The blobs are verbatim copies of project files, so they get the same
+      // protection as the metadata.
+      expect((await fs.stat(path.join(runDir, name))).mode & 0o777).toBe(0o600);
+    }
+  });
+
+  it('skips a run directory whose run.json never got written', async () => {
+    const history = await RunHistory.open(PROJECT, root);
+    await history.add(record('good'), []);
+    const projectRoot = path.join(root, (await fs.readdir(root))[0]!);
+
+    // A crash between writing the blobs and writing run.json leaves this.
+    const halfWritten = path.join(projectRoot, 'half-written');
+    await fs.mkdir(halfWritten, { recursive: true });
+    await fs.writeFile(path.join(halfWritten, '0.before'), 'orphan');
+
+    expect((await RunHistory.open(PROJECT, root)).list().map((r) => r.prompt)).toEqual(['good']);
+  });
+});
