@@ -1,4 +1,4 @@
-import type { AgentEvent, AgentKind, FileDiff, RunRecord, ServerMessage } from '@vizion/shared';
+import type { AgentEvent, AgentKind, FileDiff, OverrideProposal, RunRecord, ServerMessage } from '@vizion/shared';
 
 export interface RunState {
   running: boolean;
@@ -12,12 +12,15 @@ export interface RunState {
   runs: RunRecord[];
   /** Set on a `run-undone` server message, cleared when a new run starts. */
   undoNotice: string | null;
+  /** Set on an `overlay-proposal` server message; cleared on `start` / `clear`. */
+  proposal: { overrides: OverrideProposal[]; note?: string } | null;
 }
 
 export type RunAction =
   | { type: 'server'; message: ServerMessage }
   | { type: 'start'; agent: AgentKind; prompt: string }
-  | { type: 'clear' };
+  | { type: 'clear' }
+  | { type: 'clear-proposal' };
 
 export const initialRunState: RunState = {
   running: false,
@@ -29,6 +32,7 @@ export const initialRunState: RunState = {
   restoredFiles: null,
   runs: [],
   undoNotice: null,
+  proposal: null,
 };
 
 export function runReducer(state: RunState, action: RunAction): RunState {
@@ -44,9 +48,12 @@ export function runReducer(state: RunState, action: RunAction): RunState {
         exitCode: null,
         restoredFiles: null,
         undoNotice: null,
+        proposal: null,
       };
     case 'clear':
       return initialRunState;
+    case 'clear-proposal':
+      return { ...state, proposal: null };
     case 'server': {
       const message = action.message;
       switch (message.type) {
@@ -63,6 +70,8 @@ export function runReducer(state: RunState, action: RunAction): RunState {
         }
         case 'diff':
           return { ...state, diff: message.files };
+        case 'overlay-proposal':
+          return { ...state, proposal: { overrides: message.overrides, note: message.note } };
         case 'restored':
           return { ...state, restoredFiles: message.files };
         case 'error':

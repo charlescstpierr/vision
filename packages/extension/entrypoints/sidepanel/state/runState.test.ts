@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { FileDiff, RunRecord, ServerMessage } from '@vizion/shared';
+import type { FileDiff, OverrideProposal, RunRecord, ServerMessage } from '@vizion/shared';
 import { initialRunState, runReducer, type RunState } from './runState.js';
 
 function start(state: RunState = initialRunState): RunState {
@@ -19,6 +19,7 @@ describe('runReducer', () => {
       restoredFiles: null,
       runs: [],
       undoNotice: null,
+      proposal: null,
     });
   });
 
@@ -141,5 +142,47 @@ describe('runReducer', () => {
     expect(state.undoNotice).not.toBeNull();
     state = start(state);
     expect(state.undoNotice).toBeNull();
+  });
+
+  it('overlay-proposal message stores the proposed overrides and note', () => {
+    const overrides: OverrideProposal[] = [
+      { selector: '#hero', kind: 'style', property: 'color', value: 'red' },
+    ];
+    let state = start();
+    state = runReducer(state, {
+      type: 'server',
+      message: { type: 'overlay-proposal', overrides, note: 'Ceci devrait aider' },
+    });
+    expect(state.proposal).toEqual({ overrides, note: 'Ceci devrait aider' });
+  });
+
+  it('starting a new run clears a previous proposal', () => {
+    const overrides: OverrideProposal[] = [{ selector: '#hero', kind: 'text', value: 'Bonjour' }];
+    let state = runReducer(initialRunState, {
+      type: 'server',
+      message: { type: 'overlay-proposal', overrides },
+    });
+    expect(state.proposal).not.toBeNull();
+    state = start(state);
+    expect(state.proposal).toBeNull();
+  });
+
+  it('clear resets the proposal', () => {
+    const overrides: OverrideProposal[] = [{ selector: '#hero', kind: 'text', value: 'Bonjour' }];
+    let state = runReducer(initialRunState, {
+      type: 'server',
+      message: { type: 'overlay-proposal', overrides },
+    });
+    state = runReducer(state, { type: 'clear' });
+    expect(state.proposal).toBeNull();
+  });
+
+  it('clear-proposal clears only the proposal, leaving the rest of the state intact', () => {
+    const overrides: OverrideProposal[] = [{ selector: '#hero', kind: 'text', value: 'Bonjour' }];
+    let state = start();
+    state = runReducer(state, { type: 'server', message: { type: 'overlay-proposal', overrides } });
+    state = runReducer(state, { type: 'clear-proposal' });
+    expect(state.proposal).toBeNull();
+    expect(state.running).toBe(true);
   });
 });
