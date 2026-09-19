@@ -1,5 +1,6 @@
 import { useEffect, useReducer, useRef, useState } from 'react';
 import type { AgentKind, ContentToPanelMessage, ElementContext, PanelToContentMessage } from '@vizion/shared';
+import { overrideKey } from '@vizion/shared';
 import ElementCard from './components/ElementCard.js';
 import RunPanel from './components/RunPanel.js';
 import AgentOutput from './components/AgentOutput.js';
@@ -101,8 +102,8 @@ export default function App() {
   };
 
   const runAgent = (agent: AgentKind, promptText: string) => {
-    if (elements.length === 0) return;
-    dispatch({ type: 'start', agent, prompt: promptText });
+    if (elements.length === 0 || !tabUrl) return;
+    dispatch({ type: 'start', agent, prompt: promptText, pageKey: overrideKey(tabUrl) });
     server.send({
       type: 'run',
       agent,
@@ -113,13 +114,19 @@ export default function App() {
     });
   };
 
-  const applyProposal = () => {
-    if (!run.proposal || !tabUrl) return;
+  const applyProposal = async () => {
+    if (!run.proposal) return;
     const overrides = proposalToOverrides(run.proposal.overrides, Date.now(), () => crypto.randomUUID());
-    void addOverrides(tabUrl, overrides).then(() => {
+    try {
+      // Apply under the page the proposal was generated for, captured when
+      // the run started — not the tab that happens to be active now.
+      await addOverrides(run.proposal.pageKey, overrides);
       setNotice(`${overrides.length} override(s) appliqué(s)`);
-    });
-    dispatch({ type: 'clear-proposal' });
+      dispatch({ type: 'clear-proposal' });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      dispatch({ type: 'proposal-error', message });
+    }
   };
 
   const ignoreProposal = () => {
@@ -233,7 +240,10 @@ export default function App() {
         <ProposalView
           overrides={run.proposal.overrides}
           note={run.proposal.note}
-          onApply={applyProposal}
+          pageKey={run.proposal.pageKey}
+          currentPageKey={tabUrl ? overrideKey(tabUrl) : undefined}
+          error={run.proposalError}
+          onApply={() => void applyProposal()}
           onIgnore={ignoreProposal}
         />
       )}

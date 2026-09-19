@@ -12,15 +12,31 @@ export interface RunState {
   runs: RunRecord[];
   /** Set on a `run-undone` server message, cleared when a new run starts. */
   undoNotice: string | null;
+  /**
+   * The page key (`overrideKey(tabUrl)`, see `@vizion/shared`) of the tab the
+   * current/last run was started against. Captured on `start` so an
+   * `overlay-proposal` that arrives later can be tied to the page it was
+   * actually generated for, regardless of which tab is active by the time it
+   * arrives or is applied.
+   */
+  pageKey: string | null;
   /** Set on an `overlay-proposal` server message; cleared on `start` / `clear`. */
-  proposal: { overrides: OverrideProposal[]; note?: string } | null;
+  proposal: { overrides: OverrideProposal[]; note?: string; pageKey: string } | null;
+  /**
+   * Set when applying the current proposal's overrides failed to persist
+   * (see `proposal-error`). The proposal itself is kept so the user can
+   * retry instead of losing it. Cleared on `clear-proposal` / `start` /
+   * `clear`.
+   */
+  proposalError: string | null;
 }
 
 export type RunAction =
   | { type: 'server'; message: ServerMessage }
-  | { type: 'start'; agent: AgentKind; prompt: string }
+  | { type: 'start'; agent: AgentKind; prompt: string; pageKey: string }
   | { type: 'clear' }
-  | { type: 'clear-proposal' };
+  | { type: 'clear-proposal' }
+  | { type: 'proposal-error'; message: string };
 
 export const initialRunState: RunState = {
   running: false,
@@ -32,7 +48,9 @@ export const initialRunState: RunState = {
   restoredFiles: null,
   runs: [],
   undoNotice: null,
+  pageKey: null,
   proposal: null,
+  proposalError: null,
 };
 
 export function runReducer(state: RunState, action: RunAction): RunState {
@@ -48,12 +66,16 @@ export function runReducer(state: RunState, action: RunAction): RunState {
         exitCode: null,
         restoredFiles: null,
         undoNotice: null,
+        pageKey: action.pageKey,
         proposal: null,
+        proposalError: null,
       };
     case 'clear':
       return initialRunState;
     case 'clear-proposal':
-      return { ...state, proposal: null };
+      return { ...state, proposal: null, proposalError: null };
+    case 'proposal-error':
+      return { ...state, proposalError: action.message };
     case 'server': {
       const message = action.message;
       switch (message.type) {
@@ -71,7 +93,10 @@ export function runReducer(state: RunState, action: RunAction): RunState {
         case 'diff':
           return { ...state, diff: message.files };
         case 'overlay-proposal':
-          return { ...state, proposal: { overrides: message.overrides, note: message.note } };
+          return {
+            ...state,
+            proposal: { overrides: message.overrides, note: message.note, pageKey: state.pageKey ?? '' },
+          };
         case 'restored':
           return { ...state, restoredFiles: message.files };
         case 'error':
