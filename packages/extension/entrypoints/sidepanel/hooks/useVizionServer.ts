@@ -27,29 +27,43 @@ export function useVizionServer(settings: VizionSettings): VizionServerHandle {
   const [status, setStatus] = useState<ServerStatus>('connecting');
   const [hello, setHello] = useState<Hello | null>(null);
 
+  // Only `wsRef` and `listenersRef` outlive a single run of the effect below:
+  // `send` reaches for the socket from outside it, and subscribers are
+  // registered independently of which connection is current.
   const wsRef = useRef<WebSocket | null>(null);
   const listenersRef = useRef(new Set<(msg: ServerMessage) => void>());
-  const backoffRef = useRef(MIN_BACKOFF_MS);
-  const timerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  const closedRef = useRef(false);
 
   useEffect(() => {
-    closedRef.current = false;
-    backoffRef.current = MIN_BACKOFF_MS;
+    // Scoped to this run, not to the hook. Held in refs, these were shared
+    // across runs, and `settings` always changes once -- `useSettings` starts
+    // at its defaults and resolves `chrome.storage.local` asynchronously. So
+    // React tore this effect down and set it back up in the same commit, with
+    // `closed` flipping true then false in between. The doomed default-settings
+    // socket's `close` then arrived *after* that, no longer recognised itself
+    // as stale, and reconnected forever to the old URL on the shared timer --
+    // flipping the panel to "disconnected" about a second after it had
+    // connected, for good, with no way back but a reload.
+    let closed = false;
+    let backoff = MIN_BACKOFF_MS;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let current: WebSocket | null = null;
 
     function connect(): void {
-      if (closedRef.current) return;
+      if (closed) return;
       setStatus((prev) => (prev === 'connected' ? prev : 'connecting'));
       const url = `ws://127.0.0.1:${settings.port}/ws?token=${encodeURIComponent(settings.token)}`;
       const ws = new WebSocket(url);
+      current = ws;
       wsRef.current = ws;
 
       ws.addEventListener('open', () => {
-        backoffRef.current = MIN_BACKOFF_MS;
+        if (closed || current !== ws) return;
+        backoff = MIN_BACKOFF_MS;
         setStatus('connected');
       });
 
       ws.addEventListener('message', (event) => {
+        if (closed || current !== ws) return;
         let message: ServerMessage;
         try {
           message = JSON.parse(String(event.data)) as ServerMessage;
@@ -63,12 +77,15 @@ export function useVizionServer(settings: VizionSettings): VizionServerHandle {
       });
 
       const scheduleReconnect = () => {
-        if (closedRef.current) return;
+        // `current !== ws` means a newer socket has already replaced this one,
+        // so this close is history: reporting it would clobber a live
+        // connection's state.
+        if (closed || current !== ws) return;
         setStatus('disconnected');
         setHello(null);
-        const delay = backoffRef.current;
-        backoffRef.current = Math.min(backoffRef.current * 2, MAX_BACKOFF_MS);
-        timerRef.current = setTimeout(connect, delay);
+        const delay = backoff;
+        backoff = Math.min(backoff * 2, MAX_BACKOFF_MS);
+        timer = setTimeout(connect, delay);
       };
 
       ws.addEventListener('close', scheduleReconnect);
@@ -80,10 +97,14 @@ export function useVizionServer(settings: VizionSettings): VizionServerHandle {
     connect();
 
     return () => {
-      closedRef.current = true;
-      if (timerRef.current) clearTimeout(timerRef.current);
-      wsRef.current?.close();
-      wsRef.current = null;
+      closed = true;
+      if (timer) clearTimeout(timer);
+      const socket = current;
+      current = null;
+      socket?.close();
+      // Only drop the shared ref if it is still ours: a newer run of this
+      // effect may already have put its own socket there.
+      if (wsRef.current === socket) wsRef.current = null;
     };
   }, [settings.port, settings.token]);
 
