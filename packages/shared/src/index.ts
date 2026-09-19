@@ -34,6 +34,13 @@ export interface FileDiff {
   patch: string;
 }
 
+export type RunMode = 'source' | 'overlay';
+
+/** An override suggested by the agent in overlay mode (no id / timestamp yet). */
+export type OverrideProposal =
+  | { selector: string; kind: 'style'; property: string; value: string }
+  | { selector: string; kind: 'text'; value: string };
+
 /** A past agent run whose diff was accepted, kept so it can be undone later. */
 export interface RunRecord {
   id: string;
@@ -54,6 +61,12 @@ export type ClientMessage =
       /** Primary element (kept for compatibility); `elements` lists all selected ones. */
       element: ElementContext;
       elements?: ElementContext[];
+      /**
+       * 'source' (default): the agent edits the project files and a diff follows.
+       * 'overlay': the agent runs in an empty temporary directory and proposes
+       * overrides (styles / text) that the panel can apply on the page.
+       */
+      mode?: RunMode;
     }
   | { type: 'accept' }
   | { type: 'reject' }
@@ -67,6 +80,7 @@ export type ServerMessage =
   | { type: 'diff'; files: FileDiff[] }
   | { type: 'restored'; files: string[] }
   | { type: 'history'; runs: RunRecord[] }
+  | { type: 'overlay-proposal'; overrides: OverrideProposal[]; note?: string }
   | { type: 'run-undone'; id: string; files: string[] }
   | { type: 'pong' }
   | { type: 'error'; message: string };
