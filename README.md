@@ -1,6 +1,6 @@
 # Vizion
 
-Modifie des sites web en direct depuis Microsoft Edge ou Chrome avec un agent de code : démarre le serveur local, sélectionne un élément, décris le changement, puis accepte ou rejette le diff.
+Modifie des sites web en direct depuis Microsoft Edge ou Chrome avec un agent de code : démarre le serveur local, sélectionne un élément, décris le changement. L'agent écrit les modifications sur disque immédiatement ; consulte l'historique pour annuler le dernier run si besoin.
 
 ## Comment ça marche
 
@@ -8,7 +8,7 @@ Modifie des sites web en direct depuis Microsoft Edge ou Chrome avec un agent de
 2. Ouvre la page dans Edge ou Chrome (depuis ton serveur de dev ou n'importe quel site).
 3. Clique sur l'icône de la barre d'outils pour ouvrir le panneau latéral Vizion.
 4. Clique sur « Sélectionner un élément », puis clique sur l'élément à modifier.
-5. Décris le changement dans l'invite, choisis un agent, et envoie. Le résultat s'affiche en direct, révise le diff, puis accepte ou rejette.
+5. Décris le changement dans l'invite, choisis un agent, et envoie. Le résultat s'affiche en direct ; le diff est appliqué immédiatement sur disque et ton serveur de dev recharge la page.
 
 **Deux modes :**
 
@@ -22,7 +22,7 @@ Modifie des sites web en direct depuis Microsoft Edge ou Chrome avec un agent de
 - Microsoft Edge ou Chrome
 - Au moins un CLI d'agent sur le PATH : `codex` ou `claude`
 
-Les agents fonctionnent en mode auto-edit (la boîte de dialogue Accepter/Rejeter du diff est le garde-fou) ; gère les changements avec git.
+Les agents fonctionnent en mode auto-edit : les fichiers sont modifiés directement sur disque. Gère les changements avec git ; l'annulation depuis l'Historique du panneau est ton garde-fou principal.
 
 ## Installation
 
@@ -112,9 +112,9 @@ Il annote chaque élément hôte JSX (`div`, `button`, ...) avec un attribut `da
 3. Clique sur « Sélectionner un élément » et clique sur l'élément à modifier. Pour en choisir plusieurs, fais Maj+clic dès le premier élément : le mode sélection reste actif tant que tu tiens Maj ; un clic simple sélectionne et quitte le mode (reclique sur « Sélectionner un élément » pour en ajouter ensuite).
 4. La carte d'élément affiche le sélecteur, le chemin DOM et les styles calculés.
 5. Modifications rapides : bouton « Modifier le texte », lignes couleur/taille/marge, ou écris une invite complète. En mode Overlay, chaque modification devient un override ; « Annuler » / « Refaire » dans la section Historique.
-6. Choisis un agent (Codex ou Claude), coche « Joindre une capture de l'élément » si tu veux que l'agent voie le rendu (premier clic : capture mise en attente, second clic : envoi), puis « Envoyer à l'agent ».
-7. Regarde le résultat s'afficher en direct dans le panneau. Le bouton « Arrêter » interrompt l'agent en cours : le diff de ce qu'il a déjà écrit arrive quand même, donc un run interrompu reste révisable et rejetable. Un run qui dépasse 10 minutes est interrompu de la même façon.
-8. En mode Source : révise le diff, clique sur « Accepter » ou « Rejeter ». Un diff non décidé appartient au projet, pas au panneau : tu peux fermer le panneau latéral et le rouvrir, il te sera représenté tant que tu n'as ni accepté ni rejeté. Le dernier run accepté peut être annulé depuis l'Historique, tant que le serveur n'a pas redémarré et que les fichiers touchés n'ont pas été modifiés entre-temps (l'historique vit en mémoire et l'annulation refuse tout conflit).
+6. Choisis un agent (Codex ou Claude), puis « Envoyer à l'agent » (ou Ctrl/Cmd + Entrée). Une capture de l'élément part automatiquement avec la demande, pour que l'agent voie le rendu ; si la capture échoue, le run part quand même sans image.
+7. Regarde le résultat s'afficher en direct dans le panneau. Le bouton « Arrêter » interrompt l'agent en cours : le diff de ce qu'il a déjà écrit arrive quand même, donc un run interrompu reste visible et annulable depuis l'Historique. Un run qui dépasse 10 minutes est interrompu de la même façon.
+8. En mode Source : le diff s'affiche et est déjà appliqué sur disque. Consulte l'historique pour voir les runs exécutés. Seul le run le plus récent peut être annulé via « Annuler ce run » — si un fichier a changé depuis (formateur au save, édition manuelle), un bouton « Annuler quand même » te laisse confirmer (l'annulation défait aussi tout commit que le run aurait créé). L'historique vit en mémoire : après un redémarrage du serveur, les runs ne sont plus annulables.
 9. En mode Overlay avec le serveur allumé (site distant) : l'agent propose des overrides de styles ou de texte ; « Appliquer » les pose sur la page, « Ignorer » les écarte.
 
 ## Notes Windows et macOS
@@ -140,10 +140,10 @@ Architecture et plan de mise en œuvre : [docs/PLAN.md](docs/PLAN.md)
 | « Serveur non démarré » dans le panneau latéral | Démarre le serveur (voir « Démarrer le serveur local »), vérifie l'appairage depuis le panneau latéral et que le port correspond. |
 | « Recharge la page pour activer Vizion dessus. » | Le content script ne s'est pas chargé. Recharge la page, ou réinstalle l'extension. |
 | Aucun agent détecté | Installe le CLI `codex` ou `claude`, vérifie qu'il est sur le PATH, redémarre le serveur. |
-| Rejeter ne fait rien, diff vide | Les fonctionnalités de diff et de rejet nécessitent que ton projet soit un dépôt git. |
+| Aucun run dans l'historique après une modification | Le diff et l'annulation nécessitent que ton projet soit un dépôt git. Hors dépôt git, l'agent modifie bien les fichiers, mais Vizion ne peut ni les lister ni les restaurer. |
 | Le mode Overlay ne persiste pas | Certains sites ont une Content Security Policy stricte ou re-rendent le DOM ; les overrides peuvent ne pas survivre. |
 | « Run interrompu : délai de 10 min dépassé. » | L'agent a dépassé la limite et a été arrêté pour ne pas bloquer le projet. Révise le diff partiel, puis relance avec une demande plus étroite. |
-| « Accepte ou rejette d'abord les modifications en attente. » | Un diff d'un run précédent attend toujours ta décision. Rouvre le panneau : il te sera représenté à la connexion. |
-| Un diff en attente disparaît quand même | Il survit à la fermeture du panneau, mais pas au redémarrage du serveur. Décide avant d'arrêter `vizion`, ou reviens en arrière avec git. |
+| Run non annulable après redémarrage du serveur | L'historique vit en mémoire. Après un redémarrage, même le dernier run ne peut plus être annulé depuis le panneau. Reviens en arrière avec git si besoin. |
+| « N fichier(s) modifié(s) depuis ce run » | Un fichier touché par le run a changé après (formateur au save, édition manuelle, etc.). Clique « Annuler quand même » pour forcer l'annulation, sinon restaure le fichier et réessaye. |
 | Code d'appairage invalide | Le code `c=` change à chaque démarrage du serveur. Utilise l'URL affichée par le serveur en cours d'exécution, pas une ancienne. |
 | La page d'appairage reste sur « En attente de l'extension… » | L'extension n'est pas installée dans ce navigateur, ou la page a été ouverte avant son installation. Recharge la page. |
