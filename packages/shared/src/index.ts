@@ -79,6 +79,8 @@ export type ClientMessage =
     }
   | { type: 'accept' }
   | { type: 'reject' }
+  /** Aborts the run currently in flight, if any. The diff of whatever the agent already wrote still follows, so it can be rejected. */
+  | { type: 'cancel' }
   | { type: 'undo-run'; id: string }
   | { type: 'list-history' }
   | { type: 'ping' };

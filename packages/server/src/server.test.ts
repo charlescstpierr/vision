@@ -948,6 +948,12 @@ describe('server: multi-client broadcast and ordering', () => {
       while (events.length < 3) events.push(await readerA.next());
       expect(events[2]?.type).toBe('diff'); // A now has a pending, undecided diff
 
+      // The pending diff is project-wide, so B is shown the same undecided
+      // decision even though A is the one that started the run.
+      const pendingForB = await readerB.next();
+      if (pendingForB.type !== 'diff') throw new Error('expected diff');
+      expect(pendingForB.files.length).toBeGreaterThan(0);
+
       // B's run is refused: a pending diff exists project-wide, not just on A's socket.
       wsB.send(JSON.stringify({ type: 'run', agent: 'claude', prompt: 'p2', element }));
       expect(await readerB.next()).toEqual({
@@ -961,7 +967,9 @@ describe('server: multi-client broadcast and ordering', () => {
       if (historyA.type !== 'history') throw new Error('expected history');
       expect(historyA.runs).toHaveLength(1);
 
-      // B, which never accepted or rejected anything itself, still sees the broadcast.
+      // B, which never accepted or rejected anything itself, still sees both
+      // the cleared diff and the history broadcast.
+      expect(await readerB.next()).toEqual({ type: 'diff', files: [] });
       const historyB = await readerB.next();
       if (historyB.type !== 'history') throw new Error('expected history');
       expect(historyB.runs).toHaveLength(1);
@@ -1189,6 +1197,204 @@ describe('server screenshot handling', () => {
     } finally {
       await server.stop();
       await fs.rm(cwd, { recursive: true, force: true });
+    }
+  });
+});
+
+/**
+ * Yields `started`, then blocks until the run's `AbortSignal` fires. Stands in
+ * for an agent that hangs (or simply takes longer than the user is willing to
+ * wait), so `cancel` and the run timeout can be exercised.
+ */
+class HangingRunner implements AgentRunner {
+  readonly kind = 'claude' as const;
+
+  isAvailable(): Promise<boolean> {
+    return Promise.resolve(true);
+  }
+
+  async *run(_req: unknown, signal: AbortSignal): AsyncIterable<AgentEvent> {
+    yield { type: 'started', agent: 'claude' };
+    await new Promise<void>((resolve) => {
+      if (signal.aborted) {
+        resolve();
+        return;
+      }
+      signal.addEventListener('abort', () => resolve(), { once: true });
+    });
+    yield { type: 'error', message: 'interrompu' };
+  }
+}
+
+describe('server run cancellation', () => {
+  it('aborts an in-flight run on `cancel` and frees the lock for the next one', async () => {
+    const cwd = await setupGitRepo();
+    const server = createServer({
+      port: 0,
+      cwd,
+      runners: [new HangingRunner()],
+      allowedOriginPrefixes: [TEST_ORIGIN],
+      token: TEST_TOKEN,
+    });
+    await server.start();
+
+    try {
+      const { ws, reader } = await openSocket(server.port);
+      await reader.next(); // hello
+      await reader.next(); // history
+
+      ws.send(JSON.stringify({ type: 'run', agent: 'claude', prompt: 'hangs', element }));
+      expect(await reader.next()).toEqual({ type: 'event', event: { type: 'started', agent: 'claude' } });
+
+      ws.send(JSON.stringify({ type: 'cancel' }));
+      expect(await reader.next()).toEqual({ type: 'error', message: 'Run annulé.' });
+
+      // The runner unblocks, and the diff of whatever it wrote still arrives,
+      // so a cancelled run stays reviewable rather than vanishing.
+      expect(await reader.next()).toEqual({
+        type: 'event',
+        event: { type: 'error', message: 'interrompu' },
+      });
+      expect(await reader.next()).toEqual({ type: 'diff', files: [] });
+
+      ws.close();
+    } finally {
+      await server.stop();
+      await fs.rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses `cancel` when no run is in flight', async () => {
+    const cwd = await setupGitRepo();
+    const server = createServer({
+      port: 0,
+      cwd,
+      runners: [new HangingRunner()],
+      allowedOriginPrefixes: [TEST_ORIGIN],
+      token: TEST_TOKEN,
+    });
+    await server.start();
+
+    try {
+      const { ws, reader } = await openSocket(server.port);
+      await reader.next(); // hello
+      await reader.next(); // history
+
+      ws.send(JSON.stringify({ type: 'cancel' }));
+      expect(await reader.next()).toEqual({ type: 'error', message: 'Aucun run en cours.' });
+
+      ws.close();
+    } finally {
+      await server.stop();
+      await fs.rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('aborts a run that outlives the timeout, instead of holding the lock forever', async () => {
+    const cwd = await setupGitRepo();
+    const server = createServer({
+      port: 0,
+      cwd,
+      runners: [new HangingRunner()],
+      allowedOriginPrefixes: [TEST_ORIGIN],
+      token: TEST_TOKEN,
+      runTimeoutMs: 1000,
+    });
+    await server.start();
+
+    try {
+      const { ws, reader } = await openSocket(server.port);
+      await reader.next(); // hello
+      await reader.next(); // history
+
+      ws.send(JSON.stringify({ type: 'run', agent: 'claude', prompt: 'hangs', element }));
+      expect(await reader.next()).toEqual({ type: 'event', event: { type: 'started', agent: 'claude' } });
+
+      // Nothing is sent by the client here: the server's own timer fires.
+      expect(await reader.next()).toEqual({
+        type: 'error',
+        message: 'Run interrompu : délai de 1 s dépassé.',
+      });
+      expect(await reader.next()).toEqual({
+        type: 'event',
+        event: { type: 'error', message: 'interrompu' },
+      });
+      expect(await reader.next()).toEqual({ type: 'diff', files: [] });
+
+      ws.close();
+    } finally {
+      await server.stop();
+      await fs.rm(cwd, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('server pending diff survival', () => {
+  it('keeps an undecided diff when the panel closes, replays it on reconnect, and can still reject it', async () => {
+    const cwd = await setupGitRepo();
+    const server = createServer({
+      port: 0,
+      cwd,
+      runners: [new MultiFileRunner(cwd)],
+      allowedOriginPrefixes: [TEST_ORIGIN],
+      token: TEST_TOKEN,
+    });
+    await server.start();
+
+    try {
+      const { ws: wsA, reader: readerA } = await openSocket(server.port);
+      await readerA.next(); // hello
+      await readerA.next(); // history
+
+      wsA.send(JSON.stringify({ type: 'run', agent: 'claude', prompt: 'do multi', element }));
+      let diffForA: ServerMessage | null = null;
+      while (diffForA === null) {
+        const next = await readerA.next();
+        if (next.type === 'diff') diffForA = next;
+      }
+      expect(diffForA.type === 'diff' && diffForA.files.length).toBeGreaterThan(0);
+
+      // The user closes the side panel without deciding. Previously this threw
+      // the snapshot away and left the agent's edits unrevertable.
+      await new Promise<void>((resolve) => {
+        wsA.once('close', () => resolve());
+        wsA.close();
+      });
+
+      const { ws: wsC, reader: readerC } = await openSocket(server.port);
+      expect((await readerC.next()).type).toBe('hello');
+      expect((await readerC.next()).type).toBe('history');
+      const replayed = await readerC.next();
+      if (replayed.type !== 'diff') throw new Error('expected the pending diff to be replayed');
+      expect(replayed.files.map((file) => file.path).sort()).toEqual(['new.txt', 'tracked.txt']);
+
+      // And the decision still works from the new panel.
+      wsC.send(JSON.stringify({ type: 'reject' }));
+      const restored = await readerC.next();
+      if (restored.type !== 'restored') throw new Error('expected restored');
+      expect(restored.files.sort()).toEqual(['new.txt', 'tracked.txt']);
+
+      expect(await fs.readFile(path.join(cwd, 'tracked.txt'), 'utf8')).toBe('original content\n');
+      await expect(fs.readFile(path.join(cwd, 'new.txt'), 'utf8')).rejects.toThrow();
+
+      wsC.close();
+    } finally {
+      await server.stop();
+      await fs.rm(cwd, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('server /health exposure', () => {
+  it('does not send a wildcard CORS header, so a random page cannot read back cwd', async () => {
+    const cwd = process.cwd();
+    const server = createServer({ port: 0, cwd, runners: [], token: TEST_TOKEN });
+    await server.start();
+    try {
+      const res = await fetch(`http://127.0.0.1:${server.port}/health`);
+      expect(res.headers.get('access-control-allow-origin')).toBeNull();
+    } finally {
+      await server.stop();
     }
   });
 });

@@ -11,6 +11,8 @@ type Props = {
   setPrompt: (next: string) => void;
   promptRef?: RefObject<HTMLTextAreaElement>;
   onRun: (agent: AgentKind, prompt: string) => void;
+  /** Aborts the run in flight. The diff of whatever the agent already wrote still arrives. */
+  onCancel: () => void;
   /** Past agent runs (from the server's `list-history`), in any order — this component sorts newest first. */
   runs: RunRecord[];
   undoNotice: string | null;
@@ -61,6 +63,7 @@ export default function RunPanel({
   setPrompt,
   promptRef,
   onRun,
+  onCancel,
   runs,
   undoNotice,
   error,
@@ -200,9 +203,16 @@ export default function RunPanel({
         </p>
       )}
 
-      <button style={{ marginTop: 8 }} disabled={!canSend} onClick={submit}>
-        {sendLabel}
-      </button>
+      <div style={{ marginTop: 8, display: 'flex', gap: 8 }}>
+        <button disabled={!canSend} onClick={submit}>
+          {sendLabel}
+        </button>
+        {running && (
+          <button onClick={onCancel} title="Arrête l'agent ; le diff de ce qu'il a déjà écrit reste à valider">
+            Arrêter
+          </button>
+        )}
+      </div>
 
       <div style={{ marginTop: 16, borderTop: '1px solid #eee', paddingTop: 10 }}>
         <strong style={{ fontSize: 13 }}>Historique</strong>

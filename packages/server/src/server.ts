@@ -17,6 +17,18 @@ import { buildUndoFiles, computeDiff, restoreSnapshot, takeSnapshot, type Snapsh
 
 const execFileAsync = promisify(execFile);
 
+/**
+ * How long an agent run may stay in flight before the server aborts it.
+ * Without this, an agent that hangs holds the project-wide `OpLock`
+ * forever and nothing else -- not even an undo -- can run again.
+ */
+const DEFAULT_RUN_TIMEOUT_MS = 10 * 60 * 1000;
+
+/** Renders a timeout for humans: minutes once it reaches one, seconds below. */
+function formatTimeout(ms: number): string {
+  return ms >= 60_000 ? `${Math.round(ms / 60_000)} min` : `${Math.round(ms / 1000)} s`;
+}
+
 const require = createRequire(import.meta.url);
 const pkg = require('../package.json') as { name: string; version: string };
 
@@ -29,6 +41,8 @@ export interface CreateServerOptions {
   allowedOriginPrefixes?: string[];
   /** Pairing token required on `/ws` connections. Defaults to loading/creating one under `~/.vizion/token`. Overridable for tests. */
   token?: string;
+  /** Milliseconds before an in-flight run is aborted. Defaults to 10 minutes; overridable for tests. */
+  runTimeoutMs?: number;
 }
 
 export interface VizionServer {
@@ -132,16 +146,18 @@ function handleHealth(cwd: string, agents: AgentKind[], res: ServerResponse): vo
     agents,
     requiresToken: true,
   };
-  res.writeHead(200, {
-    'Content-Type': 'application/json',
-    'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Methods': 'GET',
-  });
+  // No `Access-Control-Allow-Origin`: the side panel reaches the server over
+  // `/ws`, never over `fetch`, so nothing legitimate needs cross-origin reads
+  // here. With the wildcard, any page the user happened to have open could
+  // read back `cwd` (an absolute path on their machine) and the list of
+  // installed agents. Direct clients such as `curl` are unaffected.
+  res.writeHead(200, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify(body));
 }
 
 export function createServer(options: CreateServerOptions): VizionServer {
   const { port, cwd } = options;
+  const runTimeoutMs = options.runTimeoutMs ?? DEFAULT_RUN_TIMEOUT_MS;
   const runners = options.runners ?? createRunners();
   const allowedOriginPrefixes = options.allowedOriginPrefixes ?? ['chrome-extension://'];
 
@@ -175,24 +191,29 @@ export function createServer(options: CreateServerOptions): VizionServer {
   // `activeRun`: the history is about the shared project, not a connection.
   const history = new RunHistory();
 
-  // The snapshot from the most recently *finished* run on a connection
-  // (diff already sent), plus the paths it touched (what `reject` should
-  // restore), the diff itself (what `accept` stores into history) and the
-  // run's own metadata (agent/prompt/selectors, for the RunRecord). Set only
-  // once the diff has been sent, so its presence means "awaiting
-  // accept/reject", not "a run is in progress". Cleared on `accept`,
-  // `reject`, or socket close.
-  const pendingSnapshots = new Map<
-    WebSocket,
-    {
-      snapshot: Snapshot;
-      touchedPaths: string[];
-      files: FileDiff[];
-      agent: AgentKind;
-      prompt: string;
-      selectors: string[];
-    }
-  >();
+  // The snapshot from the most recently *finished* run (diff already sent),
+  // plus the paths it touched (what `reject` should restore), the diff itself
+  // (what `accept` stores into history) and the run's own metadata
+  // (agent/prompt/selectors, for the RunRecord). Set only once the diff has
+  // been sent, so its presence means "awaiting accept/reject", not "a run is
+  // in progress". Cleared on `accept` or `reject` only.
+  //
+  // Server-wide rather than per-connection, and deliberately NOT cleared when
+  // a socket closes: it is the only record of how to put the project back the
+  // way it was. Keyed by socket, closing the side panel between the diff
+  // arriving and the user deciding threw the snapshot away and left the
+  // agent's edits unrevertable. A reconnecting panel is handed the pending
+  // diff again (see the `connection` handler below) and can still decide.
+  let pendingRun:
+    | {
+        snapshot: Snapshot;
+        touchedPaths: string[];
+        files: FileDiff[];
+        agent: AgentKind;
+        prompt: string;
+        selectors: string[];
+      }
+    | null = null;
 
   httpServer.on('upgrade', (req: IncomingMessage, socket: Socket, head: Buffer) => {
     const url = new URL(req.url ?? '', 'http://localhost');
@@ -226,7 +247,7 @@ export function createServer(options: CreateServerOptions): VizionServer {
     // Project-wide, not just this socket: acceptance order must equal
     // execution order, so a run is refused while ANY connection has an
     // undecided diff.
-    if (pendingSnapshots.size > 0) {
+    if (pendingRun) {
       send(ws, { type: 'error', message: "Accepte ou rejette d'abord les modifications en attente." });
       return;
     }
@@ -245,6 +266,20 @@ export function createServer(options: CreateServerOptions): VizionServer {
     const controller = new AbortController();
     activeRun = { ws, controller };
     opLock.acquire('run');
+
+    // Abort the run if it outlives `runTimeoutMs`. The `finally` below still
+    // diffs and hands back whatever the agent managed to write, so a timed-out
+    // run is reviewable (and rejectable) like any other.
+    const timeoutTimer = setTimeout(() => {
+      if (activeRun?.controller !== controller) return;
+      // Broadcast, not `send`: the panel that started the run may have closed,
+      // and the timeout concerns the project either way.
+      broadcast({
+        type: 'error',
+        message: `Run interrompu : délai de ${formatTimeout(runTimeoutMs)} dépassé.`,
+      });
+      controller.abort();
+    }, runTimeoutMs);
 
     const isOverlay = message.mode === 'overlay';
     let overlayTempDir: string | null = null;
@@ -342,15 +377,18 @@ export function createServer(options: CreateServerOptions): VizionServer {
         // Diff after the run finishes, whether it completed, errored, or was aborted.
         try {
           const files = await computeDiff(snapshot);
-          pendingSnapshots.set(ws, {
+          pendingRun = {
             snapshot,
             touchedPaths: files.map((file) => file.path),
             files,
             agent: message.agent,
             prompt: message.prompt,
             selectors,
-          });
-          send(ws, { type: 'diff', files });
+          };
+          // Broadcast, not `send`: the pending diff belongs to the project, so
+          // every open panel shows the same decision (including one that
+          // reconnected while the run was still going).
+          broadcast({ type: 'diff', files });
         } catch (diffErr) {
           send(ws, {
             type: 'error',
@@ -367,7 +405,8 @@ export function createServer(options: CreateServerOptions): VizionServer {
       if (screenshotDir) {
         await fs.rm(screenshotDir, { recursive: true, force: true }).catch(() => {});
       }
-      if (activeRun?.ws === ws) {
+      clearTimeout(timeoutTimer);
+      if (activeRun?.controller === controller) {
         activeRun = null;
         opLock.release('run');
       }
@@ -388,7 +427,7 @@ export function createServer(options: CreateServerOptions): VizionServer {
       send(ws, { type: 'error', message: 'Une opération est déjà en cours.' });
       return;
     }
-    if (activeRun || pendingSnapshots.size > 0) {
+    if (activeRun || pendingRun) {
       send(ws, { type: 'error', message: "Termine le run en cours d'abord." });
       return;
     }
@@ -471,12 +510,12 @@ export function createServer(options: CreateServerOptions): VizionServer {
             send(ws, { type: 'error', message: 'Une opération est déjà en cours.' });
             return;
           }
-          const pending = pendingSnapshots.get(ws);
+          const pending = pendingRun;
           if (!pending) {
             send(ws, { type: 'error', message: 'rien à accepter ou rejeter' });
             return;
           }
-          pendingSnapshots.delete(ws);
+          pendingRun = null;
           const undoFiles = await buildUndoFiles(pending.snapshot, pending.touchedPaths);
           history.add(
             {
@@ -489,7 +528,7 @@ export function createServer(options: CreateServerOptions): VizionServer {
             },
             undoFiles,
           );
-          send(ws, { type: 'diff', files: [] });
+          broadcast({ type: 'diff', files: [] });
           broadcast({ type: 'history', runs: history.list() });
           return;
         }
@@ -498,22 +537,33 @@ export function createServer(options: CreateServerOptions): VizionServer {
             send(ws, { type: 'error', message: 'Une opération est déjà en cours.' });
             return;
           }
-          const pending = pendingSnapshots.get(ws);
+          const pending = pendingRun;
           if (!pending) {
             send(ws, { type: 'error', message: 'rien à accepter ou rejeter' });
             return;
           }
-          pendingSnapshots.delete(ws);
+          pendingRun = null;
           const { restored, skipped } = await restoreSnapshot(pending.snapshot, pending.touchedPaths);
-          send(ws, { type: 'restored', files: restored });
+          broadcast({ type: 'restored', files: restored });
           if (skipped.length > 0) {
-            send(ws, {
+            broadcast({
               type: 'error',
               message: `Fichiers trop volumineux non restaurés : ${skipped.join(', ')}`,
             });
           }
-          send(ws, { type: 'diff', files: [] });
+          broadcast({ type: 'diff', files: [] });
           broadcast({ type: 'history', runs: history.list() });
+          return;
+        }
+        case 'cancel': {
+          if (!activeRun) {
+            send(ws, { type: 'error', message: 'Aucun run en cours.' });
+            return;
+          }
+          // Any connection may cancel: the run holds the project-wide lock, so
+          // the panel that started it may well be gone by now.
+          broadcast({ type: 'error', message: 'Run annulé.' });
+          activeRun.controller.abort();
           return;
         }
         case 'run':
@@ -536,6 +586,10 @@ export function createServer(options: CreateServerOptions): VizionServer {
   wss.on('connection', (ws: WebSocket) => {
     send(ws, { type: 'hello', version: pkg.version, cwd, agents: detectedAgents });
     send(ws, { type: 'history', runs: history.list() });
+    // A run finished while no panel was open (or this panel reconnected after
+    // one did): replay the undecided diff so it can still be accepted or
+    // rejected rather than being stranded.
+    if (pendingRun) send(ws, { type: 'diff', files: pendingRun.files });
 
     ws.on('message', (data: Buffer) => {
       let message: ClientMessage;
@@ -549,12 +603,13 @@ export function createServer(options: CreateServerOptions): VizionServer {
     });
 
     ws.on('close', () => {
-      if (activeRun?.ws === ws) {
-        activeRun.controller.abort();
-        activeRun = null;
-        opLock.release('run');
-      }
-      pendingSnapshots.delete(ws);
+      // Abort only. Clearing `activeRun` and releasing the lock here would free
+      // the project while the agent process is still winding down, letting the
+      // next run start against a half-finished tree and then overwrite
+      // `pendingRun` from the old one. `handleRun`'s `finally` owns that.
+      if (activeRun?.ws === ws) activeRun.controller.abort();
+      // `pendingRun` deliberately survives: it is what makes the agent's edits
+      // revertable, and the next panel to connect is handed it again.
     });
   });
 

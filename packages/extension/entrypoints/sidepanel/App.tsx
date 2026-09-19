@@ -315,6 +315,7 @@ export default function App() {
         setPrompt={setPrompt}
         promptRef={promptRef}
         onRun={runAgent}
+        onCancel={() => server.send({ type: 'cancel' })}
         runs={run.runs}
         undoNotice={run.undoNotice}
         error={run.error}

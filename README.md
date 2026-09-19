@@ -88,8 +88,8 @@ Il annote chaque élément hôte JSX (`div`, `button`, ...) avec un attribut `da
 4. La carte d'élément affiche le sélecteur, le chemin DOM et les styles calculés.
 5. Modifications rapides : bouton « Modifier le texte », lignes couleur/taille/marge, ou écris une invite complète. En mode Overlay, chaque modification devient un override ; « Annuler » / « Refaire » dans la section Historique.
 6. Choisis un agent (Codex ou Claude), coche « Joindre une capture de l'élément » si tu veux que l'agent voie le rendu (premier clic : capture mise en attente, second clic : envoi), puis « Envoyer à l'agent ».
-7. Regarde le résultat s'afficher en direct dans le panneau.
-8. En mode Source : révise le diff, clique sur « Accepter » ou « Rejeter ». Le dernier run accepté peut être annulé depuis l'Historique, tant que le serveur n'a pas redémarré et que les fichiers touchés n'ont pas été modifiés entre-temps (l'historique vit en mémoire et l'annulation refuse tout conflit).
+7. Regarde le résultat s'afficher en direct dans le panneau. Le bouton « Arrêter » interrompt l'agent en cours : le diff de ce qu'il a déjà écrit arrive quand même, donc un run interrompu reste révisable et rejetable. Un run qui dépasse 10 minutes est interrompu de la même façon.
+8. En mode Source : révise le diff, clique sur « Accepter » ou « Rejeter ». Un diff non décidé appartient au projet, pas au panneau : tu peux fermer le panneau latéral et le rouvrir, il te sera représenté tant que tu n'as ni accepté ni rejeté. Le dernier run accepté peut être annulé depuis l'Historique, tant que le serveur n'a pas redémarré et que les fichiers touchés n'ont pas été modifiés entre-temps (l'historique vit en mémoire et l'annulation refuse tout conflit).
 9. En mode Overlay avec le serveur allumé (site distant) : l'agent propose des overrides de styles ou de texte ; « Appliquer » les pose sur la page, « Ignorer » les écarte.
 
 ## Notes Windows et macOS
@@ -117,3 +117,6 @@ Architecture et plan de mise en œuvre : [docs/PLAN.md](docs/PLAN.md)
 | Aucun agent détecté | Installe le CLI `codex` ou `claude`, vérifie qu'il est sur le PATH, redémarre le serveur. |
 | Rejeter ne fait rien, diff vide | Les fonctionnalités de diff et de rejet nécessitent que ton projet soit un dépôt git. |
 | Le mode Overlay ne persiste pas | Certains sites ont une Content Security Policy stricte ou re-rendent le DOM ; les overrides peuvent ne pas survivre. |
+| « Run interrompu : délai de 10 min dépassé. » | L'agent a dépassé la limite et a été arrêté pour ne pas bloquer le projet. Révise le diff partiel, puis relance avec une demande plus étroite. |
+| « Accepte ou rejette d'abord les modifications en attente. » | Un diff d'un run précédent attend toujours ta décision. Rouvre le panneau : il te sera représenté à la connexion. |
+| Un diff en attente disparaît quand même | Il survit à la fermeture du panneau, mais pas au redémarrage du serveur. Décide avant d'arrêter `vizion`, ou reviens en arrière avec git. |
