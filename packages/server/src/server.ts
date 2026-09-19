@@ -12,6 +12,7 @@ import type { AgentKind, AgentRunner, ClientMessage, FileDiff, ServerMessage } f
 import { RunHistory } from './history.js';
 import { parseOverlayProposal } from './overlay.js';
 import { createRunners, detectAvailableAgents } from './runners/index.js';
+import { decodeScreenshot, writeScreenshotFile } from './screenshot.js';
 import { buildUndoFiles, computeDiff, restoreSnapshot, takeSnapshot, type Snapshot } from './snapshot.js';
 
 const execFileAsync = promisify(execFile);
@@ -247,12 +248,24 @@ export function createServer(options: CreateServerOptions): VizionServer {
 
     const isOverlay = message.mode === 'overlay';
     let overlayTempDir: string | null = null;
+    let screenshotDir: string | null = null;
 
     try {
       const runner = runners.find((candidate) => candidate.kind === message.agent);
       if (!runner || !(await runner.isAvailable())) {
         send(ws, { type: 'error', message: `agent non disponible : ${message.agent}` });
         return;
+      }
+
+      let screenshotPath: string | undefined;
+      if (message.screenshot) {
+        const decoded = decodeScreenshot(message.screenshot.dataUrl);
+        if ('error' in decoded) {
+          send(ws, { type: 'error', message: decoded.error });
+          return;
+        }
+        screenshotPath = await writeScreenshotFile(decoded.buffer, decoded.ext);
+        screenshotDir = path.dirname(screenshotPath);
       }
 
       const selectors = (message.elements ?? [message.element]).map((el) => el.selector);
@@ -271,6 +284,7 @@ export function createServer(options: CreateServerOptions): VizionServer {
           cwd: overlayTempDir,
           mode: message.mode,
           readOnly: true,
+          screenshotPath,
         };
 
         let accumulatedText = '';
@@ -280,10 +294,14 @@ export function createServer(options: CreateServerOptions): VizionServer {
         }
 
         const result = parseOverlayProposal(accumulatedText, selectors);
-        // Clean up before replying so the temp dir is already gone by the
+        // Clean up before replying so the temp dirs are already gone by the
         // time the client sees the result.
         await fs.rm(overlayTempDir, { recursive: true, force: true }).catch(() => {});
         overlayTempDir = null;
+        if (screenshotDir) {
+          await fs.rm(screenshotDir, { recursive: true, force: true }).catch(() => {});
+          screenshotDir = null;
+        }
         if ('error' in result) {
           send(ws, { type: 'error', message: result.error });
         } else {
@@ -305,6 +323,7 @@ export function createServer(options: CreateServerOptions): VizionServer {
         elements: message.elements,
         pageUrl: message.element.pageUrl,
         cwd,
+        screenshotPath,
       };
 
       const snapshot = await takeSnapshot(cwd);
@@ -314,6 +333,12 @@ export function createServer(options: CreateServerOptions): VizionServer {
           send(ws, { type: 'event', event });
         }
       } finally {
+        // Screenshot cleanup before the diff so the file is already gone by
+        // the time the client sees it (matches the overlay-mode ordering).
+        if (screenshotDir) {
+          await fs.rm(screenshotDir, { recursive: true, force: true }).catch(() => {});
+          screenshotDir = null;
+        }
         // Diff after the run finishes, whether it completed, errored, or was aborted.
         try {
           const files = await computeDiff(snapshot);
@@ -338,6 +363,9 @@ export function createServer(options: CreateServerOptions): VizionServer {
     } finally {
       if (overlayTempDir) {
         await fs.rm(overlayTempDir, { recursive: true, force: true }).catch(() => {});
+      }
+      if (screenshotDir) {
+        await fs.rm(screenshotDir, { recursive: true, force: true }).catch(() => {});
       }
       if (activeRun?.ws === ws) {
         activeRun = null;

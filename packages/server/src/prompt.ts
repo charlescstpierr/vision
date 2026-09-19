@@ -106,3 +106,13 @@ export function buildOverlayPrompt(req: RunRequest & { elements?: ElementContext
     'You may put one short sentence of context before the code block (an optional note), but the code block itself must contain ONLY the JSON array.',
   ].join('\n');
 }
+
+/**
+ * Appends a note pointing the agent at the saved screenshot file, used by
+ * both `buildPrompt` and `buildOverlayPrompt` outputs when the run carries
+ * one. Kept as a separate step (rather than baked into the builders above)
+ * so both runners can append it after picking whichever prompt they built.
+ */
+export function appendScreenshotNote(prompt: string, screenshotPath: string): string {
+  return `${prompt}\n\nA screenshot of the selected element is saved at ${screenshotPath}. View it before deciding what to change.`;
+}

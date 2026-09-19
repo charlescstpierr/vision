@@ -21,6 +21,20 @@ describe('buildCodexArgs', () => {
     ]);
     expect(args).toContain('--skip-git-repo-check');
   });
+
+  it('adds --image before -C when a screenshot path is given', () => {
+    const args = buildCodexArgs('/home/user/project', false, '/tmp/vizion-shot-abc/vizion-shot-1.png');
+    expect(args).toEqual([
+      'exec',
+      '--json',
+      '--full-auto',
+      '--image',
+      '/tmp/vizion-shot-abc/vizion-shot-1.png',
+      '-C',
+      '/home/user/project',
+      '-',
+    ]);
+  });
 });
 
 describe('parseCodexLine', () => {

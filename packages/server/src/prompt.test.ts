@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ElementContext, RunRequest } from '@vizion/shared';
-import { buildOverlayPrompt, buildPrompt } from './prompt.js';
+import { appendScreenshotNote, buildOverlayPrompt, buildPrompt } from './prompt.js';
 
 function makeRequest(overrides: Partial<ElementContext> = {}): RunRequest {
   const element: ElementContext = {
@@ -149,5 +149,15 @@ describe('buildOverlayPrompt', () => {
     const encoded = JSON.stringify(trickySelector);
     expect(prompt).toContain(encoded);
     expect(JSON.parse(encoded)).toBe(trickySelector);
+  });
+});
+
+describe('appendScreenshotNote', () => {
+  it('adds a line pointing the agent at the screenshot file', () => {
+    const result = appendScreenshotNote('Task: do it', '/tmp/vizion-shot-abc/vizion-shot-123.png');
+    expect(result).toContain('Task: do it');
+    expect(result).toContain(
+      'A screenshot of the selected element is saved at /tmp/vizion-shot-abc/vizion-shot-123.png. View it before deciding what to change.',
+    );
   });
 });

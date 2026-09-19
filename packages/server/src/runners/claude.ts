@@ -1,5 +1,5 @@
 import type { AgentEvent, AgentRunner, RunMode, RunRequest } from '@vizion/shared';
-import { buildOverlayPrompt, buildPrompt } from '../prompt.js';
+import { appendScreenshotNote, buildOverlayPrompt, buildPrompt } from '../prompt.js';
 import { isCommandAvailable, spawnCli } from './spawn.js';
 
 const COMMAND = 'claude';
@@ -93,10 +93,11 @@ export class ClaudeRunner implements AgentRunner {
   }
 
   async *run(
-    req: RunRequest & { cwd: string; mode?: RunMode; readOnly?: boolean },
+    req: RunRequest & { cwd: string; mode?: RunMode; readOnly?: boolean; screenshotPath?: string },
     signal: AbortSignal,
   ): AsyncIterable<AgentEvent> {
-    const prompt = req.mode === 'overlay' ? buildOverlayPrompt(req, req.cwd) : buildPrompt(req, req.cwd);
+    const basePrompt = req.mode === 'overlay' ? buildOverlayPrompt(req, req.cwd) : buildPrompt(req, req.cwd);
+    const prompt = req.screenshotPath ? appendScreenshotNote(basePrompt, req.screenshotPath) : basePrompt;
     // --verbose is required by the CLI whenever --print is combined with
     // --output-format stream-json (verified: `claude -p --output-format
     // stream-json ...` without --verbose exits with "requires --verbose").
