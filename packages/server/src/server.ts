@@ -44,6 +44,8 @@ export interface CreateServerOptions {
   token?: string;
   /** Milliseconds before an in-flight run is aborted. Defaults to 10 minutes; overridable for tests. */
   runTimeoutMs?: number;
+  /** Where run history is stored. Defaults to `~/.vizion/history`; overridden by tests so they never touch the real one. */
+  historyRoot?: string;
 }
 
 export interface VizionServer {
@@ -219,9 +221,11 @@ export function createServer(options: CreateServerOptions): VizionServer {
   // refuse instead of racing it.
   const opLock = new OpLock();
 
-  // Accepted runs, kept so their diff can be undone later. Server-wide, like
+  // Applied runs, kept so they can be undone later. Server-wide, like
   // `activeRun`: the history is about the shared project, not a connection.
-  const history = new RunHistory();
+  // Opened in `start()` because it reads what a previous server left on disk;
+  // every use below sits in a handler that cannot fire before then.
+  let history!: RunHistory;
 
   // The diff of the most recent run, replayed to a panel that connects later.
   // Informational only: the agent runs in auto-edit mode, so by the time a
@@ -393,7 +397,7 @@ export function createServer(options: CreateServerOptions): VizionServer {
               snapshot,
               files.map((file) => file.path),
             );
-            history.add(
+            const stored = await history.add(
               {
                 agent: message.agent,
                 prompt: message.prompt,
@@ -405,7 +409,16 @@ export function createServer(options: CreateServerOptions): VizionServer {
               undoFiles,
               snapshot.headSha,
             );
-            recorded = true;
+            recorded = stored !== null;
+            if (!recorded) {
+              // The edits are on disk either way; what failed is our ability
+              // to take them back, which the user needs to know now rather
+              // than when they try.
+              send(ws, {
+                type: 'error',
+                message: "Run appliqué, mais non enregistré dans l'historique : annulation indisponible.",
+              });
+            }
           }
           // Diff first: it is the result of the run. The refreshed history
           // follows only when there is actually a new entry in it.
@@ -453,7 +466,7 @@ export function createServer(options: CreateServerOptions): VizionServer {
       send(ws, { type: 'error', message: "Termine le run en cours d'abord." });
       return;
     }
-    const entry = history.get(id);
+    const entry = await history.get(id);
     if (!entry) {
       send(ws, { type: 'error', message: 'Run introuvable.' });
       return;
@@ -520,7 +533,7 @@ export function createServer(options: CreateServerOptions): VizionServer {
         }
       }
 
-      history.markUndone(id);
+      await history.markUndone(id);
       send(ws, { type: 'run-undone', id, files: entry.record.files });
       broadcast({ type: 'history', runs: history.list() });
     } catch (err) {
@@ -606,6 +619,16 @@ export function createServer(options: CreateServerOptions): VizionServer {
         pairingToken = await loadOrCreateToken();
       }
       pairingCode = createPairingCode();
+      // Key the history on the repo root when there is one, so running the
+      // server from a subdirectory finds the same project's runs.
+      let projectPath = cwd;
+      try {
+        const { stdout } = await execFileAsync('git', ['rev-parse', '--show-toplevel'], { cwd });
+        projectPath = stdout.trim() || cwd;
+      } catch {
+        // Not a git repo: the cwd is the best key available.
+      }
+      history = await RunHistory.open(projectPath, options.historyRoot);
       detectedAgents = await detectAvailableAgents(runners);
       await new Promise<void>((resolve) => {
         httpServer.listen(port, '127.0.0.1', () => {

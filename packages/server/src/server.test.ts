@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -12,6 +13,11 @@ const IS_WIN32 = process.platform === 'win32';
 
 const execFileAsync = promisify(execFile);
 const TEST_TOKEN = 'a'.repeat(32);
+
+/** A throwaway history directory per server, so tests never write into `~/.vizion`. */
+function historyRoot(): string {
+  return path.join(os.tmpdir(), `vizion-history-${crypto.randomUUID()}`);
+}
 const TEST_ORIGIN = 'http://test';
 
 function wsUrl(port: number | null, token: string = TEST_TOKEN): string {
@@ -21,7 +27,7 @@ function wsUrl(port: number | null, token: string = TEST_TOKEN): string {
 describe('server', () => {
   it('serves /health with the expected shape, without requiring a token', async () => {
     const cwd = process.cwd();
-    const server = createServer({ port: 0, cwd, runners: [], token: TEST_TOKEN });
+    const server = createServer({ port: 0, cwd, runners: [], token: TEST_TOKEN, historyRoot: historyRoot() });
     await server.start();
     try {
       const port = server.port;
@@ -153,6 +159,7 @@ describe('server websocket', () => {
       runners: [new FakeRunner()],
       allowedOriginPrefixes: [TEST_ORIGIN],
       token: TEST_TOKEN,
+      historyRoot: historyRoot(),
     });
     await server.start();
 
@@ -223,6 +230,7 @@ describe('server websocket', () => {
       runners: [new FakeRunner()],
       allowedOriginPrefixes: [TEST_ORIGIN],
       token: TEST_TOKEN,
+      historyRoot: historyRoot(),
     });
     await server.start();
     try {
@@ -277,6 +285,7 @@ describe('server websocket', () => {
       runners: [new SlowRunner()],
       allowedOriginPrefixes: [TEST_ORIGIN],
       token: TEST_TOKEN,
+      historyRoot: historyRoot(),
     });
     await server.start();
 
@@ -339,6 +348,7 @@ describe('server diff', () => {
       runners: [new FileWritingRunner(cwd)],
       allowedOriginPrefixes: [TEST_ORIGIN],
       token: TEST_TOKEN,
+      historyRoot: historyRoot(),
     });
     await server.start();
 
@@ -441,6 +451,7 @@ describe('server run history / undo', () => {
       runners: [new MultiFileRunner(cwd)],
       allowedOriginPrefixes: [TEST_ORIGIN],
       token: TEST_TOKEN,
+      historyRoot: historyRoot(),
     });
     await server.start();
 
@@ -508,6 +519,7 @@ describe('server run history / undo', () => {
       runners: [new DeletingRunner(cwd)],
       allowedOriginPrefixes: [TEST_ORIGIN],
       token: TEST_TOKEN,
+      historyRoot: historyRoot(),
     });
     await server.start();
 
@@ -552,6 +564,7 @@ describe('server run history / undo', () => {
       runners: [new HangingRunner()],
       allowedOriginPrefixes: [TEST_ORIGIN],
       token: TEST_TOKEN,
+      historyRoot: historyRoot(),
     });
     await server.start();
 
@@ -598,6 +611,7 @@ describe('server run history / undo', () => {
       runners: [makeFileRunner('claude', cwd, 'a.txt'), makeFileRunner('codex', cwd, 'b.txt')],
       allowedOriginPrefixes: [TEST_ORIGIN],
       token: TEST_TOKEN,
+      historyRoot: historyRoot(),
     });
     await server.start();
 
@@ -738,6 +752,7 @@ describe('server undo-run: byte-based restore', () => {
       runners: [new BinaryRunner(cwd)],
       allowedOriginPrefixes: [TEST_ORIGIN],
       token: TEST_TOKEN,
+      historyRoot: historyRoot(),
     });
     await server.start();
 
@@ -781,6 +796,7 @@ describe('server undo-run: byte-based restore', () => {
       runners: [new EmptyFileRunner(cwd)],
       allowedOriginPrefixes: [TEST_ORIGIN],
       token: TEST_TOKEN,
+      historyRoot: historyRoot(),
     });
     await server.start();
 
@@ -823,6 +839,7 @@ describe('server undo-run: byte-based restore', () => {
       runners: [new ChmodRunner(cwd)],
       allowedOriginPrefixes: [TEST_ORIGIN],
       token: TEST_TOKEN,
+      historyRoot: historyRoot(),
     });
     await server.start();
 
@@ -868,6 +885,7 @@ describe('server undo-run: byte-based restore', () => {
       runners: [new DeletingRunner(cwd)],
       allowedOriginPrefixes: [TEST_ORIGIN],
       token: TEST_TOKEN,
+      historyRoot: historyRoot(),
     });
     await server.start();
 
@@ -922,6 +940,7 @@ describe('server: multi-client broadcast and ordering', () => {
       runners: [new MultiFileRunner(cwd)],
       allowedOriginPrefixes: [TEST_ORIGIN],
       token: TEST_TOKEN,
+      historyRoot: historyRoot(),
     });
     await server.start();
 
@@ -996,6 +1015,7 @@ describe('server overlay mode', () => {
       runners: [runner],
       allowedOriginPrefixes: [TEST_ORIGIN],
       token: TEST_TOKEN,
+      historyRoot: historyRoot(),
     });
     await server.start();
 
@@ -1038,6 +1058,7 @@ describe('server overlay mode', () => {
       runners: [runner],
       allowedOriginPrefixes: [TEST_ORIGIN],
       token: TEST_TOKEN,
+      historyRoot: historyRoot(),
     });
     await server.start();
 
@@ -1103,6 +1124,7 @@ describe('server screenshot handling', () => {
       runners: [runner],
       allowedOriginPrefixes: [TEST_ORIGIN],
       token: TEST_TOKEN,
+      historyRoot: historyRoot(),
     });
     await server.start();
 
@@ -1150,6 +1172,7 @@ describe('server screenshot handling', () => {
       runners: [runner],
       allowedOriginPrefixes: [TEST_ORIGIN],
       token: TEST_TOKEN,
+      historyRoot: historyRoot(),
     });
     await server.start();
 
@@ -1213,6 +1236,7 @@ describe('server run cancellation', () => {
       runners: [new HangingRunner()],
       allowedOriginPrefixes: [TEST_ORIGIN],
       token: TEST_TOKEN,
+      historyRoot: historyRoot(),
     });
     await server.start();
 
@@ -1250,6 +1274,7 @@ describe('server run cancellation', () => {
       runners: [new HangingRunner()],
       allowedOriginPrefixes: [TEST_ORIGIN],
       token: TEST_TOKEN,
+      historyRoot: historyRoot(),
     });
     await server.start();
 
@@ -1276,6 +1301,7 @@ describe('server run cancellation', () => {
       runners: [new HangingRunner()],
       allowedOriginPrefixes: [TEST_ORIGIN],
       token: TEST_TOKEN,
+      historyRoot: historyRoot(),
       runTimeoutMs: 1000,
     });
     await server.start();
@@ -1316,6 +1342,7 @@ describe('server diff survival', () => {
       runners: [new MultiFileRunner(cwd)],
       allowedOriginPrefixes: [TEST_ORIGIN],
       token: TEST_TOKEN,
+      historyRoot: historyRoot(),
     });
     await server.start();
 
@@ -1368,7 +1395,7 @@ describe('server diff survival', () => {
 describe('server /health exposure', () => {
   it('does not send a wildcard CORS header, so a random page cannot read back cwd', async () => {
     const cwd = process.cwd();
-    const server = createServer({ port: 0, cwd, runners: [], token: TEST_TOKEN });
+    const server = createServer({ port: 0, cwd, runners: [], token: TEST_TOKEN, historyRoot: historyRoot() });
     await server.start();
     try {
       const res = await fetch(`http://127.0.0.1:${server.port}/health`);
@@ -1382,7 +1409,7 @@ describe('server /health exposure', () => {
 describe('server /pair', () => {
   it('serves the pairing page for the right code and refuses any other', async () => {
     const cwd = process.cwd();
-    const server = createServer({ port: 0, cwd, runners: [], token: TEST_TOKEN });
+    const server = createServer({ port: 0, cwd, runners: [], token: TEST_TOKEN, historyRoot: historyRoot() });
     await server.start();
     try {
       const base = `http://127.0.0.1:${server.port}/pair`;
@@ -1412,7 +1439,7 @@ describe('server /pair', () => {
 
   it('still 404s on unknown paths, and ignores the query string when routing', async () => {
     const cwd = process.cwd();
-    const server = createServer({ port: 0, cwd, runners: [], token: TEST_TOKEN });
+    const server = createServer({ port: 0, cwd, runners: [], token: TEST_TOKEN, historyRoot: historyRoot() });
     await server.start();
     try {
       expect((await fetch(`http://127.0.0.1:${server.port}/nope`)).status).toBe(404);
@@ -1420,6 +1447,105 @@ describe('server /pair', () => {
       expect((await fetch(`http://127.0.0.1:${server.port}/health?x=1`)).status).toBe(200);
     } finally {
       await server.stop();
+    }
+  });
+});
+
+describe('server history persistence', () => {
+  it('keeps a run undoable across a server restart', async () => {
+    const cwd = await setupGitRepo();
+    // Same history root and same project for both servers: that is what makes
+    // the second one find the first one's runs.
+    const sharedHistory = historyRoot();
+    const makeServer = () =>
+      createServer({
+        port: 0,
+        cwd,
+        runners: [new MultiFileRunner(cwd)],
+        allowedOriginPrefixes: [TEST_ORIGIN],
+        token: TEST_TOKEN,
+        historyRoot: sharedHistory,
+      });
+
+    const first = await makeServer();
+    await first.start();
+    let runId: string;
+    try {
+      const { ws, reader } = await openSocket(first.port);
+      await reader.next(); // hello
+      expect(await reader.next()).toEqual({ type: 'history', runs: [] });
+
+      ws.send(JSON.stringify({ type: 'run', agent: 'claude', prompt: 'do multi', element }));
+      const events: ServerMessage[] = [];
+      while (events.length < 4) events.push(await reader.next());
+      const history = events[3];
+      if (history?.type !== 'history') throw new Error('expected history');
+      runId = history.runs[0]!.id;
+
+      ws.close();
+    } finally {
+      await first.stop();
+    }
+
+    // The user stops `vizion` and starts it again later.
+    const second = await makeServer();
+    await second.start();
+    try {
+      const { ws, reader } = await openSocket(second.port);
+      await reader.next(); // hello
+      const history = await reader.next();
+      if (history.type !== 'history') throw new Error('expected history');
+      expect(history.runs).toHaveLength(1);
+      expect(history.runs[0]).toMatchObject({ id: runId, prompt: 'do multi', status: 'applied' });
+
+      // And it is not just a listing: the run can actually be taken back.
+      ws.send(JSON.stringify({ type: 'undo-run', id: runId }));
+      const undone = await reader.next();
+      if (undone.type !== 'run-undone') throw new Error(`expected run-undone, got ${JSON.stringify(undone)}`);
+      expect(undone.files.slice().sort()).toEqual(['new.txt', 'tracked.txt']);
+      expect(await fs.readFile(path.join(cwd, 'tracked.txt'), 'utf8')).toBe('original content\n');
+      await expect(fs.readFile(path.join(cwd, 'new.txt'))).rejects.toThrow();
+
+      // The undo is persisted too: a third server must not offer it again.
+      const historyAfter = await reader.next();
+      if (historyAfter.type !== 'history') throw new Error('expected history');
+      expect(historyAfter.runs[0]?.status).toBe('undone');
+
+      ws.close();
+    } finally {
+      await second.stop();
+      await fs.rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('writes nothing into the project directory', async () => {
+    const cwd = await setupGitRepo();
+    const server = createServer({
+      port: 0,
+      cwd,
+      runners: [new MultiFileRunner(cwd)],
+      allowedOriginPrefixes: [TEST_ORIGIN],
+      token: TEST_TOKEN,
+      historyRoot: historyRoot(),
+    });
+    await server.start();
+    try {
+      const { ws, reader } = await openSocket(server.port);
+      await reader.next(); // hello
+      await reader.next(); // history
+      ws.send(JSON.stringify({ type: 'run', agent: 'claude', prompt: 'do multi', element }));
+      const events: ServerMessage[] = [];
+      while (events.length < 4) events.push(await reader.next());
+
+      // Only what the agent wrote; no `.vizion` bookkeeping to pollute the
+      // user's own diffs.
+      const entries = (await fs.readdir(cwd)).sort();
+      expect(entries).toEqual(['.git', 'new.txt', 'tracked.txt']);
+
+      ws.close();
+    } finally {
+      await server.stop();
+      await fs.rm(cwd, { recursive: true, force: true });
     }
   });
 });
