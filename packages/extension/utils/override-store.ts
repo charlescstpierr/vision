@@ -58,19 +58,37 @@ export async function loadHistory(url: string): Promise<HistoryState> {
   return createHistory(await loadOverrides(url));
 }
 
-async function saveHistory(url: string, history: HistoryState): Promise<void> {
-  await chrome.storage.local.set({ [historyStorageKey(url)]: history });
+/**
+ * Writes the overrides list and its history together in a single
+ * `chrome.storage.local.set` call, so a failure partway through can never
+ * leave one persisted without the other.
+ */
+async function persist(url: string, overrides: Override[], history: HistoryState): Promise<void> {
+  await chrome.storage.local.set({
+    [storageKeyFor(url)]: overrides,
+    [historyStorageKey(url)]: history,
+  });
 }
 
 /** Writes `next` as the page's overrides and records the prior list as an undo step. */
 async function commit(url: string, next: Override[]): Promise<Override[]> {
   const history = await loadHistory(url);
-  await Promise.all([saveOverrides(url, next), saveHistory(url, pushHistory(history, next))]);
+  await persist(url, next, pushHistory(history, next));
   return next;
 }
 
 export async function addOverride(url: string, override: Override): Promise<Override[]> {
   return enqueue(overrideKey(url), async () => commit(url, [...(await loadOverrides(url)), override]));
+}
+
+/**
+ * Appends several overrides at once as a single undo step: one history push
+ * and one storage write, so e.g. applying a quick-style change to multiple
+ * selected elements undoes in one action instead of one per element.
+ */
+export async function addOverrides(url: string, overrides: Override[]): Promise<Override[]> {
+  if (overrides.length === 0) return loadOverrides(url);
+  return enqueue(overrideKey(url), async () => commit(url, [...(await loadOverrides(url)), ...overrides]));
 }
 
 export async function removeOverride(url: string, id: string): Promise<Override[]> {
@@ -90,7 +108,7 @@ export async function clearOverrides(url: string): Promise<void> {
 export async function undoOverrides(url: string): Promise<Override[]> {
   return enqueue(overrideKey(url), async () => {
     const updated = undoHistory(await loadHistory(url));
-    await Promise.all([saveOverrides(url, updated.present), saveHistory(url, updated)]);
+    await persist(url, updated.present, updated);
     return updated.present;
   });
 }
@@ -99,7 +117,7 @@ export async function undoOverrides(url: string): Promise<Override[]> {
 export async function redoOverrides(url: string): Promise<Override[]> {
   return enqueue(overrideKey(url), async () => {
     const updated = redoHistory(await loadHistory(url));
-    await Promise.all([saveOverrides(url, updated.present), saveHistory(url, updated)]);
+    await persist(url, updated.present, updated);
     return updated.present;
   });
 }

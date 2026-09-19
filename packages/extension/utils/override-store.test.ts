@@ -1,11 +1,27 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { Override } from '@vizion/shared';
-import { addOverride, loadOverrides, redoOverrides, removeOverride, undoOverrides } from './override-store.js';
+import {
+  addOverride,
+  addOverrides,
+  historyStorageKey,
+  loadHistory,
+  loadOverrides,
+  redoOverrides,
+  removeOverride,
+  undoOverrides,
+  clearOverrides,
+} from './override-store.js';
+
+/** Every call made to the fake `chrome.storage.local.set`, keys in call order. */
+let setCalls: string[][] = [];
 
 /** Minimal fake of `chrome.storage.local`, with a delay on `get` so
- * concurrent read-modify-write calls actually interleave in tests. */
+ * concurrent read-modify-write calls actually interleave in tests. Also
+ * records every `set` call's keys, so tests can assert a mutation persists
+ * the overrides list and its history together in one call. */
 function installFakeChromeStorage(): void {
   const store = new Map<string, unknown>();
+  setCalls = [];
 
   (globalThis as { chrome?: unknown }).chrome = {
     storage: {
@@ -17,6 +33,7 @@ function installFakeChromeStorage(): void {
         set: (items: Record<string, unknown>) =>
           new Promise<void>((resolve) => {
             setTimeout(() => {
+              setCalls.push(Object.keys(items));
               for (const [k, v] of Object.entries(items)) store.set(k, v);
               resolve();
             }, 0);
@@ -77,5 +94,72 @@ describe('undo/redo', () => {
     const fresh = url + '-fresh';
     const result = await undoOverrides(fresh);
     expect(result).toEqual([]);
+  });
+});
+
+describe('atomic storage writes', () => {
+  const url = 'http://localhost/atomic-page';
+
+  /** Asserts the mutation just run made exactly one `set` call, carrying
+   * both the overrides list and the history for `pageUrl`. Assumes
+   * `setCalls` was reset right before that mutation ran. */
+  function expectAtomicSet(pageUrl: string): void {
+    expect(setCalls).toHaveLength(1);
+    expect(setCalls[0]).toHaveLength(2);
+    expect(setCalls[0]).toContain(historyStorageKey(pageUrl));
+  }
+
+  it('addOverride persists overrides and history in a single set call', async () => {
+    setCalls = [];
+    await addOverride(url, makeOverride('a'));
+    expectAtomicSet(url);
+  });
+
+  it('removeOverride persists overrides and history in a single set call', async () => {
+    const page = url + '-remove';
+    await addOverride(page, makeOverride('a'));
+    setCalls = [];
+    await removeOverride(page, 'a');
+    expectAtomicSet(page);
+  });
+
+  it('clearOverrides persists overrides and history in a single set call', async () => {
+    const page = url + '-clear';
+    await addOverride(page, makeOverride('a'));
+    setCalls = [];
+    await clearOverrides(page);
+    expectAtomicSet(page);
+  });
+
+  it('undoOverrides persists overrides and history in a single set call', async () => {
+    const page = url + '-undo';
+    await addOverride(page, makeOverride('a'));
+    setCalls = [];
+    await undoOverrides(page);
+    expectAtomicSet(page);
+  });
+
+  it('redoOverrides persists overrides and history in a single set call', async () => {
+    const page = url + '-redo';
+    await addOverride(page, makeOverride('a'));
+    await undoOverrides(page);
+    setCalls = [];
+    await redoOverrides(page);
+    expectAtomicSet(page);
+  });
+});
+
+describe('addOverrides (batch)', () => {
+  const url = 'http://localhost/batch-page';
+
+  it('appends all entries with a single history push and a single storage write', async () => {
+    await addOverrides(url, [makeOverride('a'), makeOverride('b'), makeOverride('c')]);
+
+    expect((await loadOverrides(url)).map((o) => o.id)).toEqual(['a', 'b', 'c']);
+    expect((await loadHistory(url)).past).toHaveLength(1);
+    expect(setCalls.filter((keys) => keys.includes(historyStorageKey(url)))).toHaveLength(1);
+
+    const afterUndo = await undoOverrides(url);
+    expect(afterUndo).toEqual([]);
   });
 });

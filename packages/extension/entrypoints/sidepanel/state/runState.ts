@@ -76,6 +76,10 @@ export function runReducer(state: RunState, action: RunAction): RunState {
               run.id === message.id ? { ...run, status: 'undone' as const } : run,
             ),
             undoNotice: `Run annulé : ${message.files.length} fichier(s) restauré(s)`,
+            // Undoing a run resolves whatever error state led to it (e.g. a
+            // reviewer rejecting a bad run), so any stale error banner should
+            // clear along with it.
+            error: null,
           };
         case 'hello':
         case 'pong':

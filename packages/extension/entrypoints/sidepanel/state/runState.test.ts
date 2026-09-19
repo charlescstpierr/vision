@@ -119,6 +119,20 @@ describe('runReducer', () => {
     expect(state.undoNotice).toBe('Run annulé : 2 fichier(s) restauré(s)');
   });
 
+  it('run-undone clears a stale error from a previous run', () => {
+    let state = runReducer(initialRunState, {
+      type: 'server',
+      message: { type: 'error', message: 'boom' },
+    });
+    expect(state.error).toBe('boom');
+    state = runReducer(state, {
+      type: 'server',
+      message: { type: 'run-undone', id: '1', files: ['a.ts'] },
+    });
+    expect(state.error).toBeNull();
+    expect(state.undoNotice).toBe('Run annulé : 1 fichier(s) restauré(s)');
+  });
+
   it('starting a new run clears any previous undo notice', () => {
     let state = runReducer(initialRunState, {
       type: 'server',
