@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { Override } from '@vizion/shared';
-import { addOverride, loadOverrides } from './override-store.js';
+import { addOverride, loadOverrides, redoOverrides, removeOverride, undoOverrides } from './override-store.js';
 
 /** Minimal fake of `chrome.storage.local`, with a delay on `get` so
  * concurrent read-modify-write calls actually interleave in tests. */
@@ -43,5 +43,39 @@ describe('addOverride concurrency', () => {
 
     const stored = await loadOverrides('http://localhost/page');
     expect(stored.map((o) => o.id).sort()).toEqual(['a', 'b']);
+  });
+});
+
+describe('undo/redo', () => {
+  const url = 'http://localhost/undo-page';
+
+  it('undo restores the list from before the last mutation, and redo re-applies it', async () => {
+    await addOverride(url, makeOverride('a'));
+    await addOverride(url, makeOverride('b'));
+
+    const afterUndo = await undoOverrides(url);
+    expect(afterUndo.map((o) => o.id)).toEqual(['a']);
+    expect((await loadOverrides(url)).map((o) => o.id)).toEqual(['a']);
+
+    const afterRedo = await redoOverrides(url);
+    expect(afterRedo.map((o) => o.id)).toEqual(['a', 'b']);
+    expect((await loadOverrides(url)).map((o) => o.id)).toEqual(['a', 'b']);
+  });
+
+  it('also records removals and undoes them back to the removed override', async () => {
+    const other = url + '-remove';
+    await addOverride(other, makeOverride('a'));
+    await addOverride(other, makeOverride('b'));
+    await removeOverride(other, 'a');
+    expect((await loadOverrides(other)).map((o) => o.id)).toEqual(['b']);
+
+    const restored = await undoOverrides(other);
+    expect(restored.map((o) => o.id).sort()).toEqual(['a', 'b']);
+  });
+
+  it('undo is a no-op with no history yet', async () => {
+    const fresh = url + '-fresh';
+    const result = await undoOverrides(fresh);
+    expect(result).toEqual([]);
   });
 });

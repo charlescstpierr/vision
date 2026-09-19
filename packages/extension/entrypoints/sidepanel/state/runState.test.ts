@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { FileDiff, ServerMessage } from '@vizion/shared';
+import type { FileDiff, RunRecord, ServerMessage } from '@vizion/shared';
 import { initialRunState, runReducer, type RunState } from './runState.js';
 
 function start(state: RunState = initialRunState): RunState {
@@ -17,6 +17,8 @@ describe('runReducer', () => {
       error: null,
       exitCode: null,
       restoredFiles: null,
+      runs: [],
+      undoNotice: null,
     });
   });
 
@@ -92,5 +94,38 @@ describe('runReducer', () => {
   it('clear resets to the initial state', () => {
     const state = start();
     expect(runReducer(state, { type: 'clear' })).toEqual(initialRunState);
+  });
+
+  it('history message stores the run list', () => {
+    const runs: RunRecord[] = [
+      { id: '1', agent: 'codex', prompt: 'do it', selectors: ['#a'], createdAt: 1, files: ['a.ts'], status: 'accepted' },
+    ];
+    const state = runReducer(initialRunState, { type: 'server', message: { type: 'history', runs } });
+    expect(state.runs).toEqual(runs);
+  });
+
+  it('run-undone marks the matching run as undone and sets a notice', () => {
+    const runs: RunRecord[] = [
+      { id: '1', agent: 'codex', prompt: 'do it', selectors: ['#a'], createdAt: 1, files: ['a.ts'], status: 'accepted' },
+      { id: '2', agent: 'claude', prompt: 'do more', selectors: ['#b'], createdAt: 2, files: ['b.ts'], status: 'accepted' },
+    ];
+    let state = runReducer(initialRunState, { type: 'server', message: { type: 'history', runs } });
+    state = runReducer(state, {
+      type: 'server',
+      message: { type: 'run-undone', id: '1', files: ['a.ts', 'b.ts'] },
+    });
+    expect(state.runs.find((r) => r.id === '1')?.status).toBe('undone');
+    expect(state.runs.find((r) => r.id === '2')?.status).toBe('accepted');
+    expect(state.undoNotice).toBe('Run annulé : 2 fichier(s) restauré(s)');
+  });
+
+  it('starting a new run clears any previous undo notice', () => {
+    let state = runReducer(initialRunState, {
+      type: 'server',
+      message: { type: 'run-undone', id: '1', files: ['a.ts'] },
+    });
+    expect(state.undoNotice).not.toBeNull();
+    state = start(state);
+    expect(state.undoNotice).toBeNull();
   });
 });

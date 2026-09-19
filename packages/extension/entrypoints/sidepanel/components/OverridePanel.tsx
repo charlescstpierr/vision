@@ -1,7 +1,17 @@
 import { useEffect, useState, type CSSProperties } from 'react';
 import type { ElementContext, Override } from '@vizion/shared';
 import { OVERRIDES_STORAGE_PREFIX, overrideKey } from '@vizion/shared';
-import { addOverride, clearOverrides, loadOverrides, removeOverride } from '../../../utils/override-store.js';
+import {
+  addOverride,
+  clearOverrides,
+  historyStorageKey,
+  loadHistory,
+  loadOverrides,
+  redoOverrides,
+  removeOverride,
+  undoOverrides,
+} from '../../../utils/override-store.js';
+import type { HistoryState } from '../../../utils/edit-history.js';
 
 type Props = {
   element: ElementContext | undefined;
@@ -53,6 +63,7 @@ export default function OverridePanel({ element, tabUrl }: Props) {
   const [value, setValue] = useState('');
   const [text, setText] = useState(element?.textContent ?? '');
   const [overrides, setOverrides] = useState<Override[]>([]);
+  const [overlayHistory, setOverlayHistory] = useState<{ past: number; future: number }>({ past: 0, future: 0 });
 
   useEffect(() => {
     setText(element?.textContent ?? '');
@@ -79,6 +90,39 @@ export default function OverridePanel({ element, tabUrl }: Props) {
       chrome.storage.onChanged.removeListener(listener);
     };
   }, [tabUrl]);
+
+  useEffect(() => {
+    if (!tabUrl) {
+      setOverlayHistory({ past: 0, future: 0 });
+      return;
+    }
+    let cancelled = false;
+    void loadHistory(tabUrl).then((h) => {
+      if (!cancelled) setOverlayHistory({ past: h.past.length, future: h.future.length });
+    });
+
+    const key = historyStorageKey(tabUrl);
+    const listener = (changes: Record<string, chrome.storage.StorageChange>, areaName: string) => {
+      if (areaName !== 'local' || !(key in changes)) return;
+      const value = changes[key]?.newValue as HistoryState | undefined;
+      setOverlayHistory({ past: value?.past.length ?? 0, future: value?.future.length ?? 0 });
+    };
+    chrome.storage.onChanged.addListener(listener);
+    return () => {
+      cancelled = true;
+      chrome.storage.onChanged.removeListener(listener);
+    };
+  }, [tabUrl]);
+
+  const undoLastChange = () => {
+    if (!tabUrl) return;
+    void undoOverrides(tabUrl).then(setOverrides);
+  };
+
+  const redoLastChange = () => {
+    if (!tabUrl) return;
+    void redoOverrides(tabUrl).then(setOverrides);
+  };
 
   const applyStyle = () => {
     if (!tabUrl || !element || value.trim().length === 0) return;
@@ -117,6 +161,18 @@ export default function OverridePanel({ element, tabUrl }: Props) {
   return (
     <div style={{ marginTop: 12, border: '1px solid #ddd', borderRadius: 8, padding: 10 }}>
       <strong style={{ fontSize: 13 }}>Overrides du mode Overlay</strong>
+
+      <div style={{ marginTop: 8, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <span style={{ fontSize: 12, color: '#444' }}>Historique</span>
+        <div style={{ display: 'flex', gap: 6 }}>
+          <button style={{ fontSize: 12 }} disabled={!tabUrl || overlayHistory.past === 0} onClick={undoLastChange}>
+            Annuler ({overlayHistory.past})
+          </button>
+          <button style={{ fontSize: 12 }} disabled={!tabUrl || overlayHistory.future === 0} onClick={redoLastChange}>
+            Refaire ({overlayHistory.future})
+          </button>
+        </div>
+      </div>
 
       {!tabUrl && (
         <p style={{ fontSize: 12, color: '#666', marginTop: 8 }}>Aucun onglet actif.</p>

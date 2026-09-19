@@ -5,6 +5,8 @@ type Props = {
   element: ElementContext;
   onClear: () => void;
   onEditText: () => void;
+  /** Compact row (tag + selector + "Retirer") used when several elements are selected. */
+  compact?: boolean;
 };
 
 const cardStyle: CSSProperties = {
@@ -31,7 +33,31 @@ const monoStyle: CSSProperties = {
   wordBreak: 'break-all',
 };
 
-export default function ElementCard({ element, onClear, onEditText }: Props) {
+export default function ElementCard({ element, onClear, onEditText, compact = false }: Props) {
+  if (compact) {
+    return (
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          gap: 8,
+          border: '1px solid #ddd',
+          borderRadius: 6,
+          padding: '6px 10px',
+          marginTop: 6,
+        }}
+      >
+        <span style={monoStyle}>
+          &lt;{element.tagName}&gt; {element.selector}
+        </span>
+        <button onClick={onClear} style={{ fontSize: 12, flex: '0 0 auto' }}>
+          Retirer
+        </button>
+      </div>
+    );
+  }
+
   const width = Math.round(element.rect.width);
   const height = Math.round(element.rect.height);
 

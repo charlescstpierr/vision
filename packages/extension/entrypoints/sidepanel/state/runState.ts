@@ -1,4 +1,4 @@
-import type { AgentEvent, AgentKind, FileDiff, ServerMessage } from '@vizion/shared';
+import type { AgentEvent, AgentKind, FileDiff, RunRecord, ServerMessage } from '@vizion/shared';
 
 export interface RunState {
   running: boolean;
@@ -8,6 +8,10 @@ export interface RunState {
   error: string | null;
   exitCode: number | null;
   restoredFiles: string[] | null;
+  /** Past agent runs reported by the server (`list-history`), newest first or not — the UI sorts. */
+  runs: RunRecord[];
+  /** Set on a `run-undone` server message, cleared when a new run starts. */
+  undoNotice: string | null;
 }
 
 export type RunAction =
@@ -23,12 +27,15 @@ export const initialRunState: RunState = {
   error: null,
   exitCode: null,
   restoredFiles: null,
+  runs: [],
+  undoNotice: null,
 };
 
 export function runReducer(state: RunState, action: RunAction): RunState {
   switch (action.type) {
     case 'start':
       return {
+        ...state,
         running: true,
         agent: action.agent,
         events: [],
@@ -36,6 +43,7 @@ export function runReducer(state: RunState, action: RunAction): RunState {
         error: null,
         exitCode: null,
         restoredFiles: null,
+        undoNotice: null,
       };
     case 'clear':
       return initialRunState;
@@ -59,6 +67,16 @@ export function runReducer(state: RunState, action: RunAction): RunState {
           return { ...state, restoredFiles: message.files };
         case 'error':
           return { ...state, running: false, error: message.message };
+        case 'history':
+          return { ...state, runs: message.runs };
+        case 'run-undone':
+          return {
+            ...state,
+            runs: state.runs.map((run) =>
+              run.id === message.id ? { ...run, status: 'undone' as const } : run,
+            ),
+            undoNotice: `Run annulé : ${message.files.length} fichier(s) restauré(s)`,
+          };
         case 'hello':
         case 'pong':
           return state;

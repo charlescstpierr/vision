@@ -1,5 +1,5 @@
 import type { ElementContext, Override } from '@vizion/shared';
-import { describeChanges, describeTextChange, type StyleChange } from '../../../utils/change-to-prompt.js';
+import { describeChangesForElements, describeTextChange, type StyleChange } from '../../../utils/change-to-prompt.js';
 import { addOverride } from '../../../utils/override-store.js';
 
 function makeId(): string {
@@ -30,22 +30,25 @@ export function useApplyChange({ sourceMode, tabUrl, prompt, setPrompt, focusPro
     focusPrompt();
   };
 
-  const applyStyleChanges = (element: ElementContext, changes: StyleChange[]) => {
+  const applyStyleChanges = (elements: ElementContext[], changes: StyleChange[]) => {
+    if (elements.length === 0) return;
     if (sourceMode) {
-      appendToPrompt(describeChanges(element, changes));
+      appendToPrompt(describeChangesForElements(elements, changes));
       return;
     }
     if (!tabUrl) return;
-    for (const change of changes) {
-      const override: Override = {
-        id: makeId(),
-        selector: element.selector,
-        kind: 'style',
-        property: change.property,
-        value: change.value,
-        createdAt: Date.now(),
-      };
-      void addOverride(tabUrl, override);
+    for (const element of elements) {
+      for (const change of changes) {
+        const override: Override = {
+          id: makeId(),
+          selector: element.selector,
+          kind: 'style',
+          property: change.property,
+          value: change.value,
+          createdAt: Date.now(),
+        };
+        void addOverride(tabUrl, override);
+      }
     }
   };
 

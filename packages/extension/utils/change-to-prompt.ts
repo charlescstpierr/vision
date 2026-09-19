@@ -22,6 +22,21 @@ export function describeChanges(element: ElementContext, changes: StyleChange[])
 }
 
 /**
+ * Describes a batch of quick-style changes across one or more selected
+ * elements. With a single element it matches `describeChanges` exactly
+ * (kept separate so `describeChanges`'s own tests are unaffected); with
+ * several, it lists every selector in one sentence instead.
+ */
+export function describeChangesForElements(elements: ElementContext[], changes: StyleChange[]): string {
+  if (elements.length <= 1) {
+    return describeChanges(elements[0]!, changes);
+  }
+  const list = changes.map((c) => `${c.property} → ${c.value}`).join(', ');
+  const selectors = elements.map((e) => e.selector).join(', ');
+  return `Change the styles of these elements (${selectors}): ${list}.`;
+}
+
+/**
  * Describes a committed inline text edit as a single sentence suitable for
  * the agent prompt, truncating each side to 120 characters.
  */

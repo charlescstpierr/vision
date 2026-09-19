@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ElementContext } from '@vizion/shared';
-import { describeChanges, describeTextChange } from './change-to-prompt.js';
+import { describeChanges, describeChangesForElements, describeTextChange } from './change-to-prompt.js';
 
 function makeElement(overrides: Partial<ElementContext> = {}): ElementContext {
   return {
@@ -30,6 +30,21 @@ describe('describeChanges', () => {
   it('omits the id fragment when the element has none', () => {
     const description = describeChanges(makeElement(), [{ property: 'color', value: 'red' }]);
     expect(description).toBe('Change the styles of this element (button): color → red.');
+  });
+});
+
+describe('describeChangesForElements', () => {
+  it('delegates to describeChanges for a single element', () => {
+    const elements = [makeElement({ id: 'hero' })];
+    expect(describeChangesForElements(elements, [{ property: 'color', value: 'red' }])).toBe(
+      describeChanges(elements[0]!, [{ property: 'color', value: 'red' }]),
+    );
+  });
+
+  it('lists every selector for several elements', () => {
+    const elements = [makeElement({ selector: '#a' }), makeElement({ selector: '.b' })];
+    const description = describeChangesForElements(elements, [{ property: 'color', value: 'red' }]);
+    expect(description).toBe('Change the styles of these elements (#a, .b): color → red.');
   });
 });
 

@@ -1,5 +1,5 @@
 import { useEffect, useState, type CSSProperties, type KeyboardEvent, type RefObject } from 'react';
-import type { AgentKind } from '@vizion/shared';
+import type { AgentKind, RunRecord } from '@vizion/shared';
 
 type Props = {
   agents: AgentKind[];
@@ -10,7 +10,23 @@ type Props = {
   setPrompt: (next: string) => void;
   promptRef?: RefObject<HTMLTextAreaElement>;
   onRun: (agent: AgentKind, prompt: string) => void;
+  /** Past agent runs (from the server's `list-history`), in any order — this component sorts newest first. */
+  runs: RunRecord[];
+  undoNotice: string | null;
+  /** Server-reported error to show inline next to the history (e.g. a failed `undo-run`). */
+  error: string | null;
+  onUndoRun: (id: string) => void;
 };
+
+const PROMPT_PREVIEW_LIMIT = 60;
+
+function truncate(text: string, limit: number): string {
+  return text.length > limit ? `${text.slice(0, limit)}…` : text;
+}
+
+function formatDateTime(timestamp: number): string {
+  return new Date(timestamp).toLocaleString('fr-CA');
+}
 
 const fieldStyle: CSSProperties = {
   width: '100%',
@@ -29,6 +45,10 @@ export default function RunPanel({
   setPrompt,
   promptRef,
   onRun,
+  runs,
+  undoNotice,
+  error,
+  onUndoRun,
 }: Props) {
   const [agent, setAgent] = useState<AgentKind | ''>(agents[0] ?? '');
 
@@ -43,6 +63,9 @@ export default function RunPanel({
 
   const hasAgents = agents.length > 0;
   const canSend = connected && elementSelected && agent !== '' && prompt.trim().length > 0 && !running;
+
+  const sortedRuns = [...runs].sort((a, b) => b.createdAt - a.createdAt);
+  const mostRecentAcceptedId = sortedRuns.find((r) => r.status === 'accepted')?.id;
 
   const submit = () => {
     if (!canSend) return;
@@ -95,6 +118,47 @@ export default function RunPanel({
       <button style={{ marginTop: 8 }} disabled={!canSend} onClick={submit}>
         Envoyer à l'agent
       </button>
+
+      <div style={{ marginTop: 16, borderTop: '1px solid #eee', paddingTop: 10 }}>
+        <strong style={{ fontSize: 13 }}>Historique</strong>
+
+        {undoNotice && <p style={{ fontSize: 12, color: '#1f6b2c', marginTop: 6 }}>{undoNotice}</p>}
+        {error && <p style={{ fontSize: 12, color: '#a83232', marginTop: 6 }}>{error}</p>}
+
+        {sortedRuns.length === 0 ? (
+          <p style={{ fontSize: 12, color: '#666', marginTop: 6 }}>Aucun run enregistré.</p>
+        ) : (
+          sortedRuns.map((run) => (
+            <div key={run.id} style={{ marginTop: 8, fontSize: 12 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+                <span>
+                  <strong>{run.agent}</strong> — {truncate(run.prompt, PROMPT_PREVIEW_LIMIT)}
+                </span>
+                <span
+                  style={{
+                    fontSize: 10,
+                    padding: '1px 6px',
+                    borderRadius: 4,
+                    flex: '0 0 auto',
+                    background: run.status === 'accepted' ? '#dcf5e0' : '#eee',
+                    color: run.status === 'accepted' ? '#1f6b2c' : '#666',
+                  }}
+                >
+                  {run.status === 'accepted' ? 'accepté' : 'annulé'}
+                </span>
+              </div>
+              <div style={{ color: '#666', marginTop: 2 }}>
+                {run.files.length} fichier{run.files.length === 1 ? '' : 's'} · {formatDateTime(run.createdAt)}
+              </div>
+              {run.id === mostRecentAcceptedId && (
+                <button style={{ marginTop: 4, fontSize: 12 }} onClick={() => onUndoRun(run.id)}>
+                  Annuler ce run
+                </button>
+              )}
+            </div>
+          ))
+        )}
+      </div>
     </div>
   );
 }
