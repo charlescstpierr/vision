@@ -1,6 +1,7 @@
 {
   "name": "@charlescstpierr/vizion",
   "version": "0.1.0",
+  "license": "MIT",
   "description": "Local server for Vizion: pairs the Vizion browser extension with a coding agent (Claude or Codex) to edit your project's live pages.",
   "private": false,
   "type": "module",
@@ -9,7 +10,10 @@
   },
   "main": "./dist/server.js",
   "types": "./dist/server.d.ts",
-  "files": ["dist", "README.md"],
+  "files": [
+    "dist",
+    "README.md"
+  ],
   "engines": {
     "node": ">=22"
   },
