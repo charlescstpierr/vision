@@ -11,7 +11,7 @@
     "test": "pnpm -r test",
     "lint": "pnpm -r lint",
     "typecheck": "pnpm -r typecheck",
-    "test:e2e": "pnpm --filter \"@vizion/extension...\" build && pnpm --filter @vizion/e2e e2e"
+    "test:e2e": "pnpm --filter \"@vizion/extension...\" build && pnpm --filter \"@charlescstpierr/vizion...\" build && pnpm --filter @vizion/e2e e2e"
   },
   "devDependencies": {
     "eslint": "^9.0.0",
