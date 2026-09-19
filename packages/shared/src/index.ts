@@ -36,6 +36,13 @@ export interface FileDiff {
 
 export type RunMode = 'source' | 'overlay';
 
+/** A cropped capture of the selected element, produced by the side panel. */
+export interface Screenshot {
+  dataUrl: string;
+  width: number;
+  height: number;
+}
+
 /** An override suggested by the agent in overlay mode (no id / timestamp yet). */
 export type OverrideProposal =
   | { selector: string; kind: 'style'; property: string; value: string }
@@ -67,6 +74,8 @@ export type ClientMessage =
        * overrides (styles / text) that the panel can apply on the page.
        */
       mode?: RunMode;
+      /** Optional JPEG/PNG capture of the selected element(s), as a data URL (max ~2 MB). */
+      screenshot?: Screenshot;
     }
   | { type: 'accept' }
   | { type: 'reject' }

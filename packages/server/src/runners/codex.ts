@@ -1,5 +1,5 @@
 import type { AgentEvent, AgentRunner, RunMode, RunRequest } from '@vizion/shared';
-import { buildOverlayPrompt, buildPrompt } from '../prompt.js';
+import { appendScreenshotNote, buildOverlayPrompt, buildPrompt } from '../prompt.js';
 import { isCommandAvailable, spawnCli } from './spawn.js';
 
 const COMMAND = 'codex';
@@ -102,10 +102,13 @@ export function parseCodexLine(line: string): AgentEvent[] {
  * read-only sandbox instead of `--full-auto` — and since that directory is
  * also a fresh, non-git temp dir, `--skip-git-repo-check` is required too,
  * or codex refuses to run at all ("Not inside a trusted directory").
+ * When `screenshotPath` is set, `--image <path>` is added so codex attaches
+ * the capture alongside the text prompt.
  */
-export function buildCodexArgs(cwd: string, readOnly: boolean | undefined): string[] {
+export function buildCodexArgs(cwd: string, readOnly: boolean | undefined, screenshotPath?: string): string[] {
   const autoArgs = readOnly ? ['--sandbox', 'read-only', '--skip-git-repo-check'] : ['--full-auto'];
-  return ['exec', '--json', ...autoArgs, '-C', cwd, '-'];
+  const imageArgs = screenshotPath ? ['--image', screenshotPath] : [];
+  return ['exec', '--json', ...autoArgs, ...imageArgs, '-C', cwd, '-'];
 }
 
 export class CodexRunner implements AgentRunner {
@@ -116,15 +119,16 @@ export class CodexRunner implements AgentRunner {
   }
 
   async *run(
-    req: RunRequest & { cwd: string; mode?: RunMode; readOnly?: boolean },
+    req: RunRequest & { cwd: string; mode?: RunMode; readOnly?: boolean; screenshotPath?: string },
     signal: AbortSignal,
   ): AsyncIterable<AgentEvent> {
-    const prompt = req.mode === 'overlay' ? buildOverlayPrompt(req, req.cwd) : buildPrompt(req, req.cwd);
+    const basePrompt = req.mode === 'overlay' ? buildOverlayPrompt(req, req.cwd) : buildPrompt(req, req.cwd);
+    const prompt = req.screenshotPath ? appendScreenshotNote(basePrompt, req.screenshotPath) : basePrompt;
     // Per the documented `codex exec` interface: --json for JSONL output,
     // -C to set the project directory, and a trailing `-` positional prompt
     // so codex reads the task from stdin instead of argv (see
-    // buildCodexArgs for the auto/sandbox flags).
-    const args = buildCodexArgs(req.cwd, req.readOnly);
+    // buildCodexArgs for the auto/sandbox/image flags).
+    const args = buildCodexArgs(req.cwd, req.readOnly, req.screenshotPath);
 
     let sawDone = false;
     let stderrText = '';

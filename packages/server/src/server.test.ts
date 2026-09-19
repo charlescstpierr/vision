@@ -1078,3 +1078,117 @@ describe('server overlay mode', () => {
     }
   });
 });
+
+// A 1x1 transparent PNG, same fixture as screenshot.test.ts.
+const PNG_1X1_BASE64 =
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+
+class ScreenshotCapturingRunner implements AgentRunner {
+  readonly kind = 'claude' as const;
+  invoked = false;
+  capturedScreenshotPath: string | undefined;
+  existedDuringRun = false;
+
+  isAvailable(): Promise<boolean> {
+    return Promise.resolve(true);
+  }
+
+  async *run(req: { cwd: string; screenshotPath?: string }): AsyncIterable<AgentEvent> {
+    this.invoked = true;
+    this.capturedScreenshotPath = req.screenshotPath;
+    if (req.screenshotPath) {
+      this.existedDuringRun = await fs
+        .access(req.screenshotPath)
+        .then(() => true)
+        .catch(() => false);
+    }
+    yield { type: 'started', agent: 'claude' };
+    yield { type: 'done', exitCode: 0 };
+  }
+}
+
+describe('server screenshot handling', () => {
+  it('writes a temp file for a valid screenshot, passes its path to the runner, and removes it after the run', async () => {
+    const cwd = await setupGitRepo();
+    const runner = new ScreenshotCapturingRunner();
+    const server = createServer({
+      port: 0,
+      cwd,
+      runners: [runner],
+      allowedOriginPrefixes: [TEST_ORIGIN],
+      token: TEST_TOKEN,
+    });
+    await server.start();
+
+    try {
+      const { ws, reader } = await openSocket(server.port);
+      await reader.next(); // hello
+      await reader.next(); // history
+
+      ws.send(
+        JSON.stringify({
+          type: 'run',
+          agent: 'claude',
+          prompt: 'do it',
+          element,
+          screenshot: { dataUrl: `data:image/png;base64,${PNG_1X1_BASE64}`, width: 1, height: 1 },
+        }),
+      );
+
+      const events: ServerMessage[] = [];
+      while (events.length < 3) {
+        events.push(await reader.next());
+      }
+      expect(events[0]).toEqual({ type: 'event', event: { type: 'started', agent: 'claude' } });
+      expect(events[1]).toEqual({ type: 'event', event: { type: 'done', exitCode: 0 } });
+      expect(events[2]?.type).toBe('diff');
+
+      expect(runner.invoked).toBe(true);
+      expect(runner.capturedScreenshotPath).toBeTypeOf('string');
+      expect(runner.existedDuringRun).toBe(true);
+      await expect(fs.access(runner.capturedScreenshotPath as string)).rejects.toThrow();
+
+      ws.close();
+    } finally {
+      await server.stop();
+      await fs.rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects an unsupported image type without invoking the runner', async () => {
+    const cwd = await setupGitRepo();
+    const runner = new ScreenshotCapturingRunner();
+    const server = createServer({
+      port: 0,
+      cwd,
+      runners: [runner],
+      allowedOriginPrefixes: [TEST_ORIGIN],
+      token: TEST_TOKEN,
+    });
+    await server.start();
+
+    try {
+      const { ws, reader } = await openSocket(server.port);
+      await reader.next(); // hello
+      await reader.next(); // history
+
+      ws.send(
+        JSON.stringify({
+          type: 'run',
+          agent: 'claude',
+          prompt: 'do it',
+          element,
+          screenshot: { dataUrl: `data:image/gif;base64,${PNG_1X1_BASE64}`, width: 1, height: 1 },
+        }),
+      );
+
+      expect(await reader.next()).toEqual({ type: 'error', message: 'Capture invalide.' });
+      expect(runner.invoked).toBe(false);
+
+      ws.close();
+    } finally {
+      await server.stop();
+      await fs.rm(cwd, { recursive: true, force: true });
+    }
+  });
+});

@@ -6,7 +6,9 @@ export default defineConfig({
     name: 'Vizion',
     description: 'Modifie des sites web en direct avec un agent de code',
     permissions: ['sidePanel', 'activeTab', 'storage', 'scripting', 'tabs'],
-    host_permissions: ['http://localhost/*', 'http://127.0.0.1/*'],
+    // '<all_urls>' is needed for chrome.tabs.captureVisibleTab to read the
+    // page pixels when attaching an element screenshot to a run.
+    host_permissions: ['http://localhost/*', 'http://127.0.0.1/*', '<all_urls>'],
     action: {
       default_title: 'Vizion',
     },

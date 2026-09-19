@@ -1,8 +1,32 @@
-import type { ContentToPanelMessage, PanelToContentMessage } from '@vizion/shared';
+import type { ContentToPanelMessage, PanelToContentMessage, RectReply } from '@vizion/shared';
 import { extractElementContext } from './dom.js';
 import { InlineEditor } from './inline-editor.js';
+import { unionVisibleRects } from './rects.js';
 
 const HIGHLIGHT_COLOR = '#2f6bff';
+
+function nextAnimationFrame(): Promise<void> {
+  return new Promise((resolve) => requestAnimationFrame(() => resolve()));
+}
+
+/**
+ * Waits at least two animation frames after a scroll (e.g. `scrollIntoView`)
+ * before measuring, then keeps waiting — up to `maxMs` — for as long as
+ * `scrollX`/`scrollY` are still changing frame to frame, to ride out smooth
+ * or inertial scrolling before the caller measures element rects.
+ */
+async function waitForScrollSettle(maxMs = 500): Promise<void> {
+  const deadline = Date.now() + maxMs;
+  await nextAnimationFrame();
+  let prevX = window.scrollX;
+  let prevY = window.scrollY;
+  await nextAnimationFrame();
+  while ((window.scrollX !== prevX || window.scrollY !== prevY) && Date.now() < deadline) {
+    prevX = window.scrollX;
+    prevY = window.scrollY;
+    await nextAnimationFrame();
+  }
+}
 
 /**
  * Owns the hover-highlight overlay + selection lifecycle for the content
@@ -33,9 +57,51 @@ export class SelectorOverlay {
           sendResponse(undefined);
           return false;
         }
+        if (message.type === 'vizion:get-rect') {
+          void this.getRect(message.selectors).then(sendResponse);
+          return true;
+        }
         return false;
       },
     );
+  }
+
+  /**
+   * Computes the union bounding box (viewport CSS pixels) of the given
+   * selectors. Each element's rect is clipped to the viewport individually
+   * and empty ones are dropped before unioning, so an element that's mostly
+   * off-screen doesn't drag the box past the edge of what's actually
+   * visible. If none is visible, scrolls the first matching element into
+   * view, waits for scrolling to settle, and remeasures. The overlay/label
+   * are hidden first so they're never captured.
+   */
+  private async getRect(selectors: string[]): Promise<RectReply> {
+    const devicePixelRatio = window.devicePixelRatio;
+    const elements = selectors
+      .map((selector) => {
+        try {
+          return document.querySelector(selector);
+        } catch {
+          return null;
+        }
+      })
+      .filter((el): el is Element => el !== null);
+
+    if (elements.length === 0) {
+      return { rect: null, devicePixelRatio };
+    }
+
+    this.hideOverlay();
+
+    const measure = () => elements.map((el) => el.getBoundingClientRect());
+    let rect = unionVisibleRects(measure(), window.innerWidth, window.innerHeight);
+    if (!rect) {
+      elements[0]!.scrollIntoView({ block: 'center', behavior: 'instant' });
+      await waitForScrollSettle();
+      rect = unionVisibleRects(measure(), window.innerWidth, window.innerHeight);
+    }
+
+    return { rect, devicePixelRatio };
   }
 
   private ensureOverlay(): { box: HTMLDivElement; label: HTMLDivElement } {

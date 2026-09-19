@@ -70,7 +70,11 @@ export function buildPrompt(req: RunRequest & { elements?: ElementContext[] }, c
  * touch any files, and must answer with a JSON array of style/text overrides
  * scoped to the selected element(s) instead of editing source.
  */
-export function buildOverlayPrompt(req: RunRequest & { elements?: ElementContext[] }, cwd: string): string {
+export function buildOverlayPrompt(
+  req: RunRequest & { elements?: ElementContext[] },
+  cwd: string,
+  options: { allowScreenshotRead?: boolean } = {},
+): string {
   const { element, pageUrl, prompt, elements } = req;
   const list = elements && elements.length > 1 ? elements : [element];
   const selectors = list.map((el) => el.selector);
@@ -97,7 +101,9 @@ export function buildOverlayPrompt(req: RunRequest & { elements?: ElementContext
     '',
     `Task: ${prompt}`,
     '',
-    'You are running in OVERLAY MODE, inside an empty, throwaway sandbox directory: it is not the real project. You cannot edit any files and must not use any tools (no Bash, Edit, Write, MultiEdit, or similar) — just answer in text.',
+    options.allowScreenshotRead
+      ? 'You are running in OVERLAY MODE, inside an empty, throwaway sandbox directory: it is not the real project. You cannot edit any files. Do not use any tool except as allowed below — just answer in text.'
+      : 'You are running in OVERLAY MODE, inside an empty, throwaway sandbox directory: it is not the real project. You cannot edit any files and must not use any tools (no Bash, Edit, Write, MultiEdit, or similar) — just answer in text.',
     `Reply with ONLY a fenced \`\`\`json code block containing a JSON array of override objects scoped to the selector(s) above (${selectorList}), each one of:`,
     '  { "selector": "<one of the selectors above>", "kind": "style", "property": "<css-property>", "value": "<css-value>" }',
     '  { "selector": "<one of the selectors above>", "kind": "text", "value": "<new text content>" }',
@@ -105,4 +111,26 @@ export function buildOverlayPrompt(req: RunRequest & { elements?: ElementContext
     'Prefer as few, precise overrides as possible.',
     'You may put one short sentence of context before the code block (an optional note), but the code block itself must contain ONLY the JSON array.',
   ].join('\n');
+}
+
+/**
+ * Appends a note pointing the agent at the saved screenshot file, used by
+ * both `buildPrompt` and `buildOverlayPrompt` outputs when the run carries
+ * one. Kept as a separate step (rather than baked into the builders above)
+ * so both runners can append it after picking whichever prompt they built.
+ *
+ * `options.readOnly` (overlay/read-only runs) swaps in a note that
+ * explicitly carves out the Read tool from the "no tools" instruction —
+ * otherwise that instruction would contradict the need to view the
+ * screenshot, since Read is the only way to look at it.
+ */
+export function appendScreenshotNote(
+  prompt: string,
+  screenshotPath: string,
+  options: { readOnly?: boolean } = {},
+): string {
+  const note = options.readOnly
+    ? `You may use the Read tool ONLY to view the screenshot saved at ${screenshotPath}; use no other tool and edit nothing.`
+    : `A screenshot of the selected element is saved at ${screenshotPath}. View it before deciding what to change.`;
+  return `${prompt}\n\n${note}`;
 }
