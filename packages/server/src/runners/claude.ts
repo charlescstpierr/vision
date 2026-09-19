@@ -1,5 +1,5 @@
-import type { AgentEvent, AgentRunner, RunRequest } from '@vizion/shared';
-import { buildPrompt } from '../prompt.js';
+import type { AgentEvent, AgentRunner, RunMode, RunRequest } from '@vizion/shared';
+import { buildOverlayPrompt, buildPrompt } from '../prompt.js';
 import { isCommandAvailable, spawnCli } from './spawn.js';
 
 const COMMAND = 'claude';
@@ -92,12 +92,20 @@ export class ClaudeRunner implements AgentRunner {
     return isCommandAvailable(COMMAND);
   }
 
-  async *run(req: RunRequest & { cwd: string }, signal: AbortSignal): AsyncIterable<AgentEvent> {
-    const prompt = buildPrompt(req, req.cwd);
+  async *run(
+    req: RunRequest & { cwd: string; mode?: RunMode; readOnly?: boolean },
+    signal: AbortSignal,
+  ): AsyncIterable<AgentEvent> {
+    const prompt = req.mode === 'overlay' ? buildOverlayPrompt(req, req.cwd) : buildPrompt(req, req.cwd);
     // --verbose is required by the CLI whenever --print is combined with
     // --output-format stream-json (verified: `claude -p --output-format
     // stream-json ...` without --verbose exits with "requires --verbose").
     const args = ['-p', '--output-format', 'stream-json', '--verbose', '--permission-mode', 'acceptEdits'];
+    // Overlay mode runs in a throwaway directory and must not touch it, so
+    // block the tools that could write or execute.
+    if (req.readOnly) {
+      args.push('--disallowedTools', 'Bash,Edit,Write,MultiEdit,NotebookEdit');
+    }
 
     let sawDone = false;
     let stderrText = '';

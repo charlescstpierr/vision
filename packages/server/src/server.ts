@@ -10,6 +10,7 @@ import { promisify } from 'node:util';
 import { WebSocketServer, type WebSocket } from 'ws';
 import type { AgentKind, AgentRunner, ClientMessage, FileDiff, ServerMessage } from '@vizion/shared';
 import { RunHistory } from './history.js';
+import { parseOverlayProposal } from './overlay.js';
 import { createRunners, detectAvailableAgents } from './runners/index.js';
 import { buildUndoFiles, computeDiff, restoreSnapshot, takeSnapshot, type Snapshot } from './snapshot.js';
 
@@ -244,10 +245,54 @@ export function createServer(options: CreateServerOptions): VizionServer {
     activeRun = { ws, controller };
     opLock.acquire('run');
 
+    const isOverlay = message.mode === 'overlay';
+    let overlayTempDir: string | null = null;
+
     try {
       const runner = runners.find((candidate) => candidate.kind === message.agent);
       if (!runner || !(await runner.isAvailable())) {
         send(ws, { type: 'error', message: `agent non disponible : ${message.agent}` });
+        return;
+      }
+
+      const selectors = (message.elements ?? [message.element]).map((el) => el.selector);
+
+      if (isOverlay) {
+        // Overlay runs never touch the project: a fresh, empty temp dir
+        // stands in for the project cwd, and the runner is told not to use
+        // any tools. No snapshot, no diff, no history record.
+        overlayTempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'vizion-overlay-'));
+        const request = {
+          agent: message.agent,
+          prompt: message.prompt,
+          element: message.element,
+          elements: message.elements,
+          pageUrl: message.element.pageUrl,
+          cwd: overlayTempDir,
+          mode: message.mode,
+          readOnly: true,
+        };
+
+        let accumulatedText = '';
+        for await (const event of runner.run(request, controller.signal)) {
+          send(ws, { type: 'event', event });
+          if (event.type === 'text') accumulatedText += event.text;
+        }
+
+        const result = parseOverlayProposal(accumulatedText, selectors);
+        // Clean up before replying so the temp dir is already gone by the
+        // time the client sees the result.
+        await fs.rm(overlayTempDir, { recursive: true, force: true }).catch(() => {});
+        overlayTempDir = null;
+        if ('error' in result) {
+          send(ws, { type: 'error', message: result.error });
+        } else {
+          send(ws, {
+            type: 'overlay-proposal',
+            overrides: result.overrides,
+            ...(result.note ? { note: result.note } : {}),
+          });
+        }
         return;
       }
 
@@ -272,7 +317,6 @@ export function createServer(options: CreateServerOptions): VizionServer {
         // Diff after the run finishes, whether it completed, errored, or was aborted.
         try {
           const files = await computeDiff(snapshot);
-          const selectors = (message.elements ?? [message.element]).map((el) => el.selector);
           pendingSnapshots.set(ws, {
             snapshot,
             touchedPaths: files.map((file) => file.path),
@@ -292,6 +336,9 @@ export function createServer(options: CreateServerOptions): VizionServer {
     } catch (err) {
       send(ws, { type: 'error', message: err instanceof Error ? err.message : "l'exécution de l'agent a échoué" });
     } finally {
+      if (overlayTempDir) {
+        await fs.rm(overlayTempDir, { recursive: true, force: true }).catch(() => {});
+      }
       if (activeRun?.ws === ws) {
         activeRun = null;
         opLock.release('run');

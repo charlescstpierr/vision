@@ -1,5 +1,5 @@
-import type { AgentEvent, AgentRunner, RunRequest } from '@vizion/shared';
-import { buildPrompt } from '../prompt.js';
+import type { AgentEvent, AgentRunner, RunMode, RunRequest } from '@vizion/shared';
+import { buildOverlayPrompt, buildPrompt } from '../prompt.js';
 import { isCommandAvailable, spawnCli } from './spawn.js';
 
 const COMMAND = 'codex';
@@ -103,14 +103,19 @@ export class CodexRunner implements AgentRunner {
     return isCommandAvailable(COMMAND);
   }
 
-  async *run(req: RunRequest & { cwd: string }, signal: AbortSignal): AsyncIterable<AgentEvent> {
-    const prompt = buildPrompt(req, req.cwd);
+  async *run(
+    req: RunRequest & { cwd: string; mode?: RunMode; readOnly?: boolean },
+    signal: AbortSignal,
+  ): AsyncIterable<AgentEvent> {
+    const prompt = req.mode === 'overlay' ? buildOverlayPrompt(req, req.cwd) : buildPrompt(req, req.cwd);
     // Per the documented `codex exec` interface: --json for JSONL output,
     // --full-auto so file edits aren't blocked on an interactive approval
     // (the diff accept/reject flow is the real gate), -C to set the project
     // directory, and a trailing `-` positional prompt so codex reads the
-    // task from stdin instead of argv.
-    const args = ['exec', '--json', '--full-auto', '-C', req.cwd, '-'];
+    // task from stdin instead of argv. Overlay mode runs in a throwaway
+    // directory and must not touch it, so use a read-only sandbox instead.
+    const autoArgs = req.readOnly ? ['--sandbox', 'read-only'] : ['--full-auto'];
+    const args = ['exec', '--json', ...autoArgs, '-C', req.cwd, '-'];
 
     let sawDone = false;
     let stderrText = '';

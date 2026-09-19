@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ElementContext, RunRequest } from '@vizion/shared';
-import { buildPrompt } from './prompt.js';
+import { buildOverlayPrompt, buildPrompt } from './prompt.js';
 
 function makeRequest(overrides: Partial<ElementContext> = {}): RunRequest {
   const element: ElementContext = {
@@ -111,5 +111,32 @@ describe('buildPrompt', () => {
     const single = buildPrompt({ ...req, elements: [req.element] }, '/tmp/proj');
     const noElements = buildPrompt(req, '/tmp/proj');
     expect(single).toBe(noElements);
+  });
+});
+
+describe('buildOverlayPrompt', () => {
+  it('lists the selector, forbids tools/edits, and states the JSON contract', () => {
+    const req = makeRequest();
+    const prompt = buildOverlayPrompt(req, '/home/user/my-project');
+
+    expect(prompt).toContain('#app > button.primary');
+    expect(prompt).toContain('"#app > button.primary"');
+    expect(prompt).toContain('cannot edit any files');
+    expect(prompt).toContain('must not use any tools');
+    expect(prompt).toContain('```json');
+    expect(prompt).toContain('"kind": "style"');
+    expect(prompt).toContain('"property"');
+    expect(prompt).toContain('"kind": "text"');
+    expect(prompt).toContain('make this button blue');
+  });
+
+  it('lists every selector for a multi-element request', () => {
+    const req = makeRequest();
+    const second: ElementContext = { ...req.element, selector: '.card__title' };
+    const prompt = buildOverlayPrompt({ ...req, elements: [req.element, second] }, '/tmp/proj');
+
+    expect(prompt).toContain('Selected elements (2):');
+    expect(prompt).toContain('"#app > button.primary"');
+    expect(prompt).toContain('".card__title"');
   });
 });
