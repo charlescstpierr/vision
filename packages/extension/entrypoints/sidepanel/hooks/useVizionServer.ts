@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { DEFAULT_PORT } from '@vizion/shared';
 import type { ClientMessage, ServerMessage } from '@vizion/shared';
+import type { VizionSettings } from './useSettings.js';
 
 export type ServerStatus = 'connecting' | 'connected' | 'disconnected';
 
@@ -19,8 +19,11 @@ const MAX_BACKOFF_MS = 10000;
 /**
  * Owns a single WebSocket connection to the local Vizion server, reconnecting
  * with doubling backoff (1s -> 10s) for as long as the side panel is open.
+ * Connects to `ws://127.0.0.1:<settings.port>/ws?token=<settings.token>`,
+ * and tears down/reconnects whenever `settings` changes (e.g. the user saves
+ * a new port or token in the Réglages section).
  */
-export function useVizionServer(): VizionServerHandle {
+export function useVizionServer(settings: VizionSettings): VizionServerHandle {
   const [status, setStatus] = useState<ServerStatus>('connecting');
   const [hello, setHello] = useState<Hello | null>(null);
 
@@ -32,11 +35,13 @@ export function useVizionServer(): VizionServerHandle {
 
   useEffect(() => {
     closedRef.current = false;
+    backoffRef.current = MIN_BACKOFF_MS;
 
     function connect(): void {
       if (closedRef.current) return;
       setStatus((prev) => (prev === 'connected' ? prev : 'connecting'));
-      const ws = new WebSocket(`ws://127.0.0.1:${DEFAULT_PORT}/ws`);
+      const url = `ws://127.0.0.1:${settings.port}/ws?token=${encodeURIComponent(settings.token)}`;
+      const ws = new WebSocket(url);
       wsRef.current = ws;
 
       ws.addEventListener('open', () => {
@@ -80,7 +85,7 @@ export function useVizionServer(): VizionServerHandle {
       wsRef.current?.close();
       wsRef.current = null;
     };
-  }, []);
+  }, [settings.port, settings.token]);
 
   const send = useCallback((msg: ClientMessage): boolean => {
     const ws = wsRef.current;

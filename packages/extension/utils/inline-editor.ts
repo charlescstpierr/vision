@@ -2,10 +2,6 @@ import type { ContentToPanelMessage } from '@vizion/shared';
 
 const OUTLINE_COLOR = '#2f6bff';
 
-function collapse(text: string): string {
-  return text.trim().replace(/\s+/g, ' ');
-}
-
 function selectAllText(el: HTMLElement): void {
   const range = document.createRange();
   range.selectNodeContents(el);
@@ -24,6 +20,11 @@ export class InlineEditor {
   private target: HTMLElement | undefined;
   private selector = '';
   private originalText = '';
+  /** The element's `contenteditable` attribute before editing started, or
+   * `null` if it had none — restored exactly on commit/cancel rather than
+   * unconditionally removed, so we don't clobber a page that was already
+   * (natively) editable. */
+  private originalContentEditable: string | null = null;
   private previousOutline = '';
 
   /** Starts (or restarts) editing the element matching `selector`. */
@@ -45,6 +46,7 @@ export class InlineEditor {
     this.target = el;
     this.selector = selector;
     this.originalText = el.textContent ?? '';
+    this.originalContentEditable = el.getAttribute('contenteditable');
     this.previousOutline = el.style.outline;
 
     el.contentEditable = 'true';
@@ -75,15 +77,18 @@ export class InlineEditor {
     if (!el) return;
     this.target = undefined;
 
-    const before = collapse(this.originalText);
-    const after = fromCommitOrBlur ? collapse(el.textContent ?? '') : before;
+    // Raw textContent, no trim/collapse: whitespace-only edits (e.g. adding
+    // a trailing space) are real edits and should round-trip exactly. The
+    // panel is free to collapse whitespace itself for a compact preview.
+    const before = this.originalText;
+    const after = fromCommitOrBlur ? (el.textContent ?? '') : before;
     if (!fromCommitOrBlur) {
       el.textContent = this.originalText;
     }
 
     el.removeEventListener('keydown', this.handleKeyDown);
     el.removeEventListener('blur', this.handleBlur);
-    el.removeAttribute('contenteditable');
+    this.restoreContentEditable(el);
     el.style.outline = this.previousOutline;
 
     this.send({
@@ -103,8 +108,16 @@ export class InlineEditor {
     el.textContent = this.originalText;
     el.removeEventListener('keydown', this.handleKeyDown);
     el.removeEventListener('blur', this.handleBlur);
-    el.removeAttribute('contenteditable');
+    this.restoreContentEditable(el);
     el.style.outline = this.previousOutline;
+  }
+
+  private restoreContentEditable(el: HTMLElement): void {
+    if (this.originalContentEditable === null) {
+      el.removeAttribute('contenteditable');
+    } else {
+      el.setAttribute('contenteditable', this.originalContentEditable);
+    }
   }
 
   private send(message: ContentToPanelMessage): void {

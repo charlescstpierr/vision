@@ -1,4 +1,4 @@
-import { useState, type CSSProperties, type KeyboardEvent, type RefObject } from 'react';
+import { useEffect, useState, type CSSProperties, type KeyboardEvent, type RefObject } from 'react';
 import type { AgentKind } from '@vizion/shared';
 
 type Props = {
@@ -31,6 +31,15 @@ export default function RunPanel({
   onRun,
 }: Props) {
   const [agent, setAgent] = useState<AgentKind | ''>(agents[0] ?? '');
+
+  // Keep the selection valid as the detected agent list arrives/changes:
+  // default to the first agent whenever the current pick isn't (or is no
+  // longer) among them.
+  useEffect(() => {
+    if (agents.length > 0 && !agents.includes(agent as AgentKind)) {
+      setAgent(agents[0]!);
+    }
+  }, [agents, agent]);
 
   const hasAgents = agents.length > 0;
   const canSend = connected && elementSelected && agent !== '' && prompt.trim().length > 0 && !running;

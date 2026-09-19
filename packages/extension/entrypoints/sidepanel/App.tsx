@@ -6,10 +6,13 @@ import AgentOutput from './components/AgentOutput.js';
 import DiffView from './components/DiffView.js';
 import OverridePanel from './components/OverridePanel.js';
 import QuickStyles from './components/QuickStyles.js';
+import SettingsPanel from './components/Settings.js';
 import { useVizionServer } from './hooks/useVizionServer.js';
 import { useActiveTab } from './hooks/useActiveTab.js';
 import { useApplyChange } from './hooks/useApplyChange.js';
+import { useSettings } from './hooks/useSettings.js';
 import { initialRunState, runReducer } from './state/runState.js';
+import { isLocalUrl } from '../../utils/url.js';
 
 async function sendToActiveTab(message: PanelToContentMessage): Promise<unknown> {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -18,7 +21,8 @@ async function sendToActiveTab(message: PanelToContentMessage): Promise<unknown>
 }
 
 export default function App() {
-  const server = useVizionServer();
+  const { settings, save: saveSettings } = useSettings();
+  const server = useVizionServer(settings);
   const tabUrl = useActiveTab();
   const [selectMode, setSelectMode] = useState(false);
   const [element, setElement] = useState<ElementContext | undefined>(undefined);
@@ -29,10 +33,21 @@ export default function App() {
 
   useEffect(() => server.subscribe((message) => dispatch({ type: 'server', message })), [server]);
 
+  // Clear the current selection when the active tab navigates elsewhere;
+  // the run/diff state is left alone since it belongs to the agent run, not
+  // to whichever element happened to be selected.
+  useEffect(() => {
+    setElement(undefined);
+  }, [tabUrl]);
+
   const connected = server.status === 'connected';
+  // Source mode requires both a live server connection and a local page:
+  // editing a remote page's source makes no sense, so it stays in Overlay
+  // mode even while connected.
+  const isSourceMode = connected && isLocalUrl(tabUrl);
 
   const { applyStyleChanges, applyTextEdit } = useApplyChange({
-    connected,
+    sourceMode: isSourceMode,
     tabUrl,
     prompt,
     setPrompt,
@@ -84,12 +99,26 @@ export default function App() {
     <div style={{ fontFamily: 'system-ui, sans-serif', padding: 16 }}>
       <h1 style={{ fontSize: 18, marginBottom: 4 }}>Vizion</h1>
       <p style={{ fontSize: 12, color: '#666', margin: 0 }}>
-        {connected && server.hello ? `Mode Source · ${server.hello.cwd}` : 'Mode Overlay · aucun serveur local'}
+        {isSourceMode && server.hello
+          ? `Mode Source · ${server.hello.cwd}`
+          : connected
+            ? 'Mode Overlay · page distante'
+            : 'Mode Overlay · aucun serveur local'}
       </p>
 
       {server.status === 'connecting' && <p>Connexion au serveur...</p>}
       {server.status === 'connected' && <p>Connecté à {server.hello?.cwd}</p>}
-      {server.status === 'disconnected' && <p>Serveur non démarré. Lance `npx vizion` dans ton projet.</p>}
+      {server.status === 'disconnected' &&
+        (settings.token === '' ? (
+          <p>
+            Serveur non démarré ou jeton manquant. Lance `npx vizion` dans ton projet et colle le jeton dans les
+            réglages.
+          </p>
+        ) : (
+          <p>Serveur non démarré. Lance `npx vizion` dans ton projet.</p>
+        ))}
+
+      <SettingsPanel settings={settings} onSave={saveSettings} />
 
       <button onClick={toggleSelectMode} style={{ marginTop: 8 }}>
         {selectMode ? 'Annuler (Échap)' : 'Sélectionner un élément'}
@@ -101,13 +130,19 @@ export default function App() {
         <ElementCard element={element} onClear={() => setElement(undefined)} onEditText={editText} />
       )}
 
-      {element && <QuickStyles element={element} onApply={(changes) => applyStyleChanges(element, changes)} />}
+      {element && (
+        <QuickStyles
+          key={element.selector}
+          element={element}
+          onApply={(changes) => applyStyleChanges(element, changes)}
+        />
+      )}
 
       <OverridePanel element={element} tabUrl={tabUrl} />
 
       <RunPanel
         agents={server.hello?.agents ?? []}
-        connected={connected}
+        connected={isSourceMode}
         elementSelected={!!element}
         running={run.running}
         prompt={prompt}

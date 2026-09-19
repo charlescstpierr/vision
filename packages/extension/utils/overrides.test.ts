@@ -53,6 +53,23 @@ describe('applyOverrides', () => {
     expect(document.head.querySelectorAll(`#${OVERRIDE_STYLE_TAG_ID}`)).toHaveLength(1);
   });
 
+  it('marks the style tag it owns with data-vizion="overrides"', () => {
+    applyOverrides(document, [style('.btn', 'color', 'red')]);
+    const tag = document.getElementById(OVERRIDE_STYLE_TAG_ID);
+    expect(tag?.getAttribute('data-vizion')).toBe('overrides');
+  });
+
+  it('never adopts an unrelated page element with the same id', () => {
+    const impostor = document.createElement('div');
+    impostor.id = OVERRIDE_STYLE_TAG_ID;
+    document.body.appendChild(impostor);
+    applyOverrides(document, [style('.btn', 'color', 'red')]);
+    expect(impostor.textContent).toBe('');
+    const styleTags = document.head.querySelectorAll(`style#${OVERRIDE_STYLE_TAG_ID}`);
+    expect(styleTags).toHaveLength(1);
+    expect(styleTags[0]!.textContent).toBe('.btn { color: red !important; }');
+  });
+
   it('sets textContent on every element matching a text override selector', () => {
     document.body.innerHTML = '<h1 class="title">old</h1>';
     applyOverrides(document, [text('.title', 'new')]);
@@ -74,5 +91,21 @@ describe('applyOverrides', () => {
     });
     applyOverrides(document, [text('.title', 'new')]);
     expect(mutated).toBe(false);
+  });
+
+  it('restores the original text once a text override is no longer present', () => {
+    document.body.innerHTML = '<p class="desc">before</p>';
+    applyOverrides(document, [text('.desc', 'after')]);
+    expect(document.querySelector('.desc')!.textContent).toBe('after');
+
+    applyOverrides(document, []);
+    expect(document.querySelector('.desc')!.textContent).toBe('before');
+  });
+
+  it('does not restore text for a selector whose override is still present', () => {
+    document.body.innerHTML = '<p class="tagline">before</p>';
+    applyOverrides(document, [text('.tagline', 'after')]);
+    applyOverrides(document, [text('.tagline', 'after')]);
+    expect(document.querySelector('.tagline')!.textContent).toBe('after');
   });
 });
