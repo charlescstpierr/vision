@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import http from 'node:http';
 import { fileURLToPath } from 'node:url';
+import { startVizionServer, type VizionTestServer } from './vizion-server.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -15,6 +16,8 @@ type Fixtures = {
   context: BrowserContext;
   extensionId: string;
   pageUrl: string;
+  /** The real Vizion server (packages/server/dist/cli.js) running against a throwaway git repo, with a fake `claude` CLI on its PATH. See e2e/vizion-server.ts. */
+  vizionServer: VizionTestServer;
 };
 
 export const test = base.extend<Fixtures>({
@@ -80,6 +83,13 @@ export const test = base.extend<Fixtures>({
       server.close(() => resolve());
       server.closeAllConnections();
     });
+  },
+
+  // eslint-disable-next-line no-empty-pattern
+  vizionServer: async ({}, use) => {
+    const server = await startVizionServer();
+    await use(server);
+    await server.stop();
   },
 });
 

@@ -1,0 +1,67 @@
+#!/usr/bin/env node
+// Fake `claude` CLI for e2e tests.
+//
+// It stands in for the real Claude Code CLI that packages/server spawns in
+// Source mode (`claude -p --output-format stream-json --verbose ...`, see
+// packages/server/src/runners/claude.ts). It must be found on PATH under the
+// bare name `claude` (no extension) with the executable bit set, and:
+//
+//   - `claude --version` prints a version and exits 0 (this is how
+//     `isCommandAvailable` in packages/server/src/runners/spawn.ts detects
+//     that the agent is installed).
+//   - Any other invocation writes OUTPUT_FILE_NAME into its cwd (the real
+//     server always spawns it with `cwd` set to the project directory) and
+//     emits a small stream-json transcript on stdout that
+//     `parseClaudeLine` understands: a `system/init` line, one `assistant`
+//     text line, and a non-error `result` line. Exits 0.
+//
+// This file is deliberately plain JavaScript (no build step): it is executed
+// directly by `node` via the shebang above, both by real invocations of
+// `node <path>/claude ...` and indirectly whenever something on PATH runs
+// `claude`.
+
+import fs from 'node:fs';
+import path from 'node:path';
+
+/** Relative path (from the agent's cwd) of the file the fake agent "edits". Read by source-run.spec.ts. */
+const OUTPUT_FILE_NAME = 'vizion-fake-agent-output.txt';
+
+const args = process.argv.slice(2);
+
+if (args.includes('--version')) {
+  console.log('fake-claude/1.0.0 (vizion e2e)');
+  process.exit(0);
+}
+
+// The real CLI reads the prompt from stdin; drain it so the parent's write
+// (then `stdin.end()`) never blocks on backpressure, even though the fake
+// agent doesn't care about the prompt's content.
+process.stdin.resume();
+
+function emit(line) {
+  process.stdout.write(`${JSON.stringify(line)}\n`);
+}
+
+try {
+  const target = path.join(process.cwd(), OUTPUT_FILE_NAME);
+  fs.writeFileSync(
+    target,
+    `Écrit par le faux agent claude (e2e).\nArgs: ${JSON.stringify(args)}\n`,
+    'utf8',
+  );
+} catch (err) {
+  // Surface the failure through the normal stream-json error shape rather
+  // than a bare non-zero exit, so the server's usual error path is exercised
+  // too if something is ever wrong with the test repo's permissions.
+  emit({ type: 'system', subtype: 'init' });
+  emit({ type: 'result', is_error: true, result: `fake-agent: ${err instanceof Error ? err.message : String(err)}` });
+  process.exit(0);
+}
+
+emit({ type: 'system', subtype: 'init' });
+emit({
+  type: 'assistant',
+  message: { content: [{ type: 'text', text: `J'ai créé ${OUTPUT_FILE_NAME} comme demandé.` }] },
+});
+emit({ type: 'result', is_error: false });
+process.exit(0);

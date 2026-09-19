@@ -5,7 +5,7 @@
     "module": "ES2022",
     "moduleResolution": "bundler",
     "strict": true,
-    "types": ["@playwright/test", "chrome"],
+    "types": ["@playwright/test", "chrome", "node"],
     "skipLibCheck": true,
     "esModuleInterop": true
   },
