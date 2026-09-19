@@ -49,7 +49,7 @@ export type OverrideProposal =
   | { selector: string; kind: 'style'; property: string; value: string }
   | { selector: string; kind: 'text'; value: string };
 
-/** A past agent run whose diff was accepted, kept so it can be undone later. */
+/** A past agent run, kept so it can be undone later. */
 export interface RunRecord {
   id: string;
   agent: AgentKind;
@@ -58,7 +58,7 @@ export interface RunRecord {
   selectors: string[];
   createdAt: number;
   files: string[];
-  status: 'accepted' | 'undone';
+  status: 'applied' | 'undone';
 }
 
 export type ClientMessage =
@@ -78,19 +78,24 @@ export type ClientMessage =
       /** Optional JPEG/PNG capture of the selected element(s), as a data URL (max ~2 MB). */
       screenshot?: Screenshot;
     }
-  | { type: 'accept' }
-  | { type: 'reject' }
-  /** Aborts the run currently in flight, if any. The diff of whatever the agent already wrote still follows, so it can be rejected. */
+  /** Aborts the run currently in flight, if any. Whatever the agent already wrote is kept, and undoable like any other run. */
   | { type: 'cancel' }
-  | { type: 'undo-run'; id: string }
+  /**
+   * Reverts a run's files. Refused with `undo-conflict` when a touched file no
+   * longer matches what the run left behind; `force` reverts it anyway,
+   * discarding whatever changed it.
+   */
+  | { type: 'undo-run'; id: string; force?: boolean }
   | { type: 'list-history' }
   | { type: 'ping' };
 
 export type ServerMessage =
   | { type: 'hello'; version: string; cwd: string; agents: AgentKind[] }
   | { type: 'event'; event: AgentEvent }
+  /** The files a run changed. Informational: they are already on disk. */
   | { type: 'diff'; files: FileDiff[] }
-  | { type: 'restored'; files: string[] }
+  /** `undo-run` refused: these files changed since the run. Retry with `force` to revert anyway. */
+  | { type: 'undo-conflict'; id: string; files: string[] }
   | { type: 'history'; runs: RunRecord[] }
   | { type: 'overlay-proposal'; overrides: OverrideProposal[]; note?: string }
   | { type: 'run-undone'; id: string; files: string[] }

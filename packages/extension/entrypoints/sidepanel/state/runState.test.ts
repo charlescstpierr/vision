@@ -24,9 +24,9 @@ describe('runReducer', () => {
       diff: null,
       error: null,
       exitCode: null,
-      restoredFiles: null,
       runs: [],
       undoNotice: null,
+      undoConflict: null,
       pageKey: PAGE_KEY,
       proposal: null,
       proposalError: null,
@@ -77,17 +77,45 @@ describe('runReducer', () => {
     expect(state.diff).toEqual(files);
   });
 
-  it('restored message records the restored file list', () => {
+  it('undo-conflict message stores the run id and the files that changed', () => {
     let state = start();
-    state = runReducer(state, { type: 'server', message: { type: 'restored', files: ['a.ts', 'b.ts'] } });
-    expect(state.restoredFiles).toEqual(['a.ts', 'b.ts']);
+    state = runReducer(state, {
+      type: 'server',
+      message: { type: 'undo-conflict', id: '1', files: ['a.ts', 'b.ts'] },
+    });
+    expect(state.undoConflict).toEqual({ id: '1', files: ['a.ts', 'b.ts'] });
   });
 
-  it('start resets restoredFiles from a previous reject', () => {
+  it('start clears a previous undo-conflict', () => {
     let state = start();
-    state = runReducer(state, { type: 'server', message: { type: 'restored', files: ['a.ts'] } });
+    state = runReducer(state, {
+      type: 'server',
+      message: { type: 'undo-conflict', id: '1', files: ['a.ts'] },
+    });
     state = start(state);
-    expect(state.restoredFiles).toBeNull();
+    expect(state.undoConflict).toBeNull();
+  });
+
+  it('clear clears an undo-conflict', () => {
+    let state = start();
+    state = runReducer(state, {
+      type: 'server',
+      message: { type: 'undo-conflict', id: '1', files: ['a.ts'] },
+    });
+    expect(runReducer(state, { type: 'clear' }).undoConflict).toBeNull();
+  });
+
+  it('run-undone clears an undo-conflict about the run it resolved', () => {
+    let state = start();
+    state = runReducer(state, {
+      type: 'server',
+      message: { type: 'undo-conflict', id: '1', files: ['a.ts'] },
+    });
+    state = runReducer(state, {
+      type: 'server',
+      message: { type: 'run-undone', id: '1', files: ['a.ts'] },
+    });
+    expect(state.undoConflict).toBeNull();
   });
 
   it('hello and pong messages are no-ops', () => {
@@ -115,7 +143,7 @@ describe('runReducer', () => {
 
   it('history message stores the run list', () => {
     const runs: RunRecord[] = [
-      { id: '1', agent: 'codex', prompt: 'do it', selectors: ['#a'], createdAt: 1, files: ['a.ts'], status: 'accepted' },
+      { id: '1', agent: 'codex', prompt: 'do it', selectors: ['#a'], createdAt: 1, files: ['a.ts'], status: 'applied' },
     ];
     const state = runReducer(initialRunState, { type: 'server', message: { type: 'history', runs } });
     expect(state.runs).toEqual(runs);
@@ -123,8 +151,8 @@ describe('runReducer', () => {
 
   it('run-undone marks the matching run as undone and sets a notice', () => {
     const runs: RunRecord[] = [
-      { id: '1', agent: 'codex', prompt: 'do it', selectors: ['#a'], createdAt: 1, files: ['a.ts'], status: 'accepted' },
-      { id: '2', agent: 'claude', prompt: 'do more', selectors: ['#b'], createdAt: 2, files: ['b.ts'], status: 'accepted' },
+      { id: '1', agent: 'codex', prompt: 'do it', selectors: ['#a'], createdAt: 1, files: ['a.ts'], status: 'applied' },
+      { id: '2', agent: 'claude', prompt: 'do more', selectors: ['#b'], createdAt: 2, files: ['b.ts'], status: 'applied' },
     ];
     let state = runReducer(initialRunState, { type: 'server', message: { type: 'history', runs } });
     state = runReducer(state, {
@@ -132,7 +160,7 @@ describe('runReducer', () => {
       message: { type: 'run-undone', id: '1', files: ['a.ts', 'b.ts'] },
     });
     expect(state.runs.find((r) => r.id === '1')?.status).toBe('undone');
-    expect(state.runs.find((r) => r.id === '2')?.status).toBe('accepted');
+    expect(state.runs.find((r) => r.id === '2')?.status).toBe('applied');
     expect(state.undoNotice).toBe('Run annulé : 2 fichier(s) restauré(s)');
   });
 

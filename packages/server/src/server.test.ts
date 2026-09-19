@@ -186,25 +186,17 @@ describe('server websocket', () => {
         { type: 'diff', files: [] },
       ]);
 
-      // A pending (undecided) diff must block a new run.
+      // Nothing to approve: a finished run leaves no gate, so the next run
+      // goes straight through.
       ws.send(JSON.stringify({ type: 'run', agent: 'claude', prompt: 'p1', element }));
-      const blocked = await reader.next();
-      expect(blocked).toEqual({
-        type: 'error',
-        message: "Accepte ou rejette d'abord les modifications en attente.",
-      });
+      expect(await reader.next()).toEqual({ type: 'event', event: { type: 'started', agent: 'claude' } });
+      const second: ServerMessage[] = [];
+      while (second.length < 4) second.push(await reader.next());
+      expect(second[3]).toEqual({ type: 'diff', files: [] });
 
-      ws.send(JSON.stringify({ type: 'accept' }));
-      expect(await reader.next()).toEqual({ type: 'diff', files: [] });
-      const acceptedHistory = await reader.next();
-      if (acceptedHistory.type !== 'history') throw new Error('expected history message');
-      expect(acceptedHistory.runs).toHaveLength(1);
-      expect(acceptedHistory.runs[0]).toMatchObject({
-        agent: 'claude',
-        prompt: 'make it blue',
-        status: 'accepted',
-        files: [],
-      });
+      // A run that touched nothing is not worth a history entry either.
+      ws.send(JSON.stringify({ type: 'list-history' }));
+      expect(await reader.next()).toEqual({ type: 'history', runs: [] });
 
       ws.close();
 
@@ -331,8 +323,8 @@ class FileWritingRunner implements AgentRunner {
   }
 }
 
-describe('server diff / accept / reject', () => {
-  it('sends a diff after a run and restores touched files on reject', async () => {
+describe('server diff', () => {
+  it('sends a diff after a run, records it, and takes it back on undo', async () => {
     const cwd = await fs.mkdtemp(path.join(os.tmpdir(), 'vizion-server-test-'));
     await execFileAsync('git', ['init', '-q'], { cwd });
     await execFileAsync(
@@ -369,17 +361,24 @@ describe('server diff / accept / reject', () => {
       expect(diffMessage.files).toHaveLength(1);
       expect(diffMessage.files[0]).toMatchObject({ path: 'touched.txt', status: 'added' });
 
-      ws.send(JSON.stringify({ type: 'reject' }));
-      const restoredMessage = await reader.next();
-      expect(restoredMessage).toEqual({ type: 'restored', files: ['touched.txt'] });
-      const afterReject = await reader.next();
-      expect(afterReject).toEqual({ type: 'diff', files: [] });
-      expect(await reader.next()).toEqual({ type: 'history', runs: [] });
+      // The run is already applied, so it lands in the history with no
+      // approval step in between.
+      const history = await reader.next();
+      if (history.type !== 'history') throw new Error('expected history');
+      expect(history.runs).toHaveLength(1);
+      expect(history.runs[0]).toMatchObject({ status: 'applied', files: ['touched.txt'] });
+
+      ws.send(JSON.stringify({ type: 'undo-run', id: history.runs[0]!.id }));
+      expect(await reader.next()).toEqual({
+        type: 'run-undone',
+        id: history.runs[0]!.id,
+        files: ['touched.txt'],
+      });
+      expect((await reader.next()).type).toBe('history');
       await expect(fs.readFile(path.join(cwd, 'touched.txt'))).rejects.toThrow();
 
-      ws.send(JSON.stringify({ type: 'reject' }));
-      const secondReject = await reader.next();
-      expect(secondReject).toEqual({ type: 'error', message: 'rien à accepter ou rejeter' });
+      ws.send(JSON.stringify({ type: 'undo-run', id: history.runs[0]!.id }));
+      expect(await reader.next()).toEqual({ type: 'error', message: 'Ce run a déjà été annulé.' });
 
       ws.close();
     } finally {
@@ -460,14 +459,12 @@ describe('server run history / undo', () => {
       if (diffMessage?.type !== 'diff') throw new Error('expected diff message');
       expect(diffMessage.files.map((f) => f.path).sort()).toEqual(['new.txt', 'tracked.txt']);
 
-      ws.send(JSON.stringify({ type: 'accept' }));
-      expect(await reader.next()).toEqual({ type: 'diff', files: [] });
       const historyAfterAccept = await reader.next();
       if (historyAfterAccept.type !== 'history') throw new Error('expected history message');
       expect(historyAfterAccept.runs).toHaveLength(1);
       const record = historyAfterAccept.runs[0];
       if (!record) throw new Error('expected a run record');
-      expect(record).toMatchObject({ agent: 'claude', prompt: 'do multi', status: 'accepted' });
+      expect(record).toMatchObject({ agent: 'claude', prompt: 'do multi', status: 'applied' });
       expect(record.files.slice().sort()).toEqual(['new.txt', 'tracked.txt']);
 
       // Explicit list-history request returns the same thing.
@@ -527,8 +524,6 @@ describe('server run history / undo', () => {
       if (diffMessage?.type !== 'diff') throw new Error('expected diff message');
       expect(diffMessage.files).toEqual([expect.objectContaining({ path: 'tracked.txt', status: 'deleted' })]);
 
-      ws.send(JSON.stringify({ type: 'accept' }));
-      await reader.next(); // diff []
       const historyMsg = await reader.next();
       if (historyMsg.type !== 'history') throw new Error('expected history');
       const record = historyMsg.runs[0];
@@ -549,12 +544,12 @@ describe('server run history / undo', () => {
     }
   });
 
-  it('refuses undo while a diff is pending', async () => {
+  it('refuses undo while a run is still in flight', async () => {
     const cwd = await setupGitRepo();
     const server = createServer({
       port: 0,
       cwd,
-      runners: [new MultiFileRunner(cwd)],
+      runners: [new HangingRunner()],
       allowedOriginPrefixes: [TEST_ORIGIN],
       token: TEST_TOKEN,
     });
@@ -566,12 +561,8 @@ describe('server run history / undo', () => {
       expect((await reader.next()).type).toBe('hello');
       expect((await reader.next()).type).toBe('history');
 
-      ws.send(JSON.stringify({ type: 'run', agent: 'claude', prompt: 'do multi', element }));
-      const events: ServerMessage[] = [];
-      while (events.length < 3) {
-        events.push(await reader.next());
-      }
-      expect(events[2]?.type).toBe('diff'); // pending, not yet accepted or rejected
+      ws.send(JSON.stringify({ type: 'run', agent: 'claude', prompt: 'hangs', element }));
+      expect(await reader.next()).toEqual({ type: 'event', event: { type: 'started', agent: 'claude' } });
 
       ws.send(JSON.stringify({ type: 'undo-run', id: 'whatever' }));
       expect(await reader.next()).toEqual({
@@ -579,6 +570,7 @@ describe('server run history / undo', () => {
         message: "Termine le run en cours d'abord.",
       });
 
+      ws.send(JSON.stringify({ type: 'cancel' }));
       ws.close();
     } finally {
       await server.stop();
@@ -598,7 +590,7 @@ describe('server run history / undo', () => {
     };
   }
 
-  it('only allows undoing the most recent still-accepted run', async () => {
+  it('only allows undoing the most recent still-applied run', async () => {
     const cwd = await setupGitRepo();
     const server = createServer({
       port: 0,
@@ -619,9 +611,7 @@ describe('server run history / undo', () => {
         ws.send(JSON.stringify({ type: 'run', agent, prompt, element }));
         const evts: ServerMessage[] = [];
         while (evts.length < 3) evts.push(await reader.next());
-        ws.send(JSON.stringify({ type: 'accept' }));
-        await reader.next(); // diff []
-        const historyMsg = await reader.next();
+            const historyMsg = await reader.next();
         if (historyMsg.type !== 'history') throw new Error('expected history');
         const rec = historyMsg.runs[0];
         if (!rec) throw new Error('expected a record');
@@ -733,7 +723,9 @@ async function readUndoOutcome(
 ): Promise<ServerMessage> {
   for (;;) {
     const message = await reader.next();
-    if (message.type === 'run-undone' || message.type === 'error') return message;
+    if (message.type === 'run-undone' || message.type === 'error' || message.type === 'undo-conflict') {
+      return message;
+    }
   }
 }
 
@@ -762,8 +754,6 @@ describe('server undo-run: byte-based restore', () => {
       if (diffMessage?.type !== 'diff') throw new Error('expected diff message');
       expect(diffMessage.files.map((f) => f.path).sort()).toEqual(['image.bin', 'new.bin']);
 
-      ws.send(JSON.stringify({ type: 'accept' }));
-      await reader.next(); // diff []
       const historyMsg = await reader.next();
       if (historyMsg.type !== 'history') throw new Error('expected history');
       const record = historyMsg.runs[0];
@@ -807,8 +797,6 @@ describe('server undo-run: byte-based restore', () => {
       if (diffMessage?.type !== 'diff') throw new Error('expected diff message');
       expect(diffMessage.files).toEqual([expect.objectContaining({ path: 'empty.txt', status: 'added' })]);
 
-      ws.send(JSON.stringify({ type: 'accept' }));
-      await reader.next(); // diff []
       const historyMsg = await reader.next();
       if (historyMsg.type !== 'history') throw new Error('expected history');
       const record = historyMsg.runs[0];
@@ -851,8 +839,6 @@ describe('server undo-run: byte-based restore', () => {
       if (diffMessage?.type !== 'diff') throw new Error('expected diff message');
       expect(diffMessage.files).toEqual([expect.objectContaining({ path: 'script.sh', status: 'modified' })]);
 
-      ws.send(JSON.stringify({ type: 'accept' }));
-      await reader.next(); // diff []
       const historyMsg = await reader.next();
       if (historyMsg.type !== 'history') throw new Error('expected history');
       const record = historyMsg.runs[0];
@@ -874,7 +860,7 @@ describe('server undo-run: byte-based restore', () => {
     }
   });
 
-  it('refuses undo and leaves the file untouched when it was recreated after the run deleted it', async () => {
+  it('reports a conflict, changes nothing, and reverts anyway on force', async () => {
     const cwd = await setupGitRepo();
     const server = createServer({
       port: 0,
@@ -898,8 +884,6 @@ describe('server undo-run: byte-based restore', () => {
       if (diffMessage?.type !== 'diff') throw new Error('expected diff message');
       expect(diffMessage.files).toEqual([expect.objectContaining({ path: 'tracked.txt', status: 'deleted' })]);
 
-      ws.send(JSON.stringify({ type: 'accept' }));
-      await reader.next(); // diff []
       const historyMsg = await reader.next();
       if (historyMsg.type !== 'history') throw new Error('expected history');
       const record = historyMsg.runs[0];
@@ -910,9 +894,16 @@ describe('server undo-run: byte-based restore', () => {
 
       ws.send(JSON.stringify({ type: 'undo-run', id: record.id }));
       const result = await readUndoOutcome(reader);
-      if (result.type !== 'error') throw new Error(`expected error, got ${JSON.stringify(result)}`);
-      expect(result.message).toContain('Conflit');
+      if (result.type !== 'undo-conflict') throw new Error(`expected undo-conflict, got ${JSON.stringify(result)}`);
+      expect(result).toEqual({ type: 'undo-conflict', id: record.id, files: ['tracked.txt'] });
+      // Nothing written: the refusal leaves the tree exactly as it was.
       expect(await fs.readFile(path.join(cwd, 'tracked.txt'), 'utf8')).toBe('user recreated this\n');
+
+      // Forcing it through is the user's call, and it discards what changed.
+      ws.send(JSON.stringify({ type: 'undo-run', id: record.id, force: true }));
+      const forced = await readUndoOutcome(reader);
+      if (forced.type !== 'run-undone') throw new Error(`expected run-undone, got ${JSON.stringify(forced)}`);
+      expect(await fs.readFile(path.join(cwd, 'tracked.txt'), 'utf8')).toBe('original content\n');
 
       ws.close();
     } finally {
@@ -923,7 +914,7 @@ describe('server undo-run: byte-based restore', () => {
 });
 
 describe('server: multi-client broadcast and ordering', () => {
-  it('broadcasts history to every client after accept, and refuses a run from another client while a diff is pending', async () => {
+  it('broadcasts the diff and the refreshed history to every client, with no approval in between', async () => {
     const cwd = await setupGitRepo();
     const server = createServer({
       port: 0,
@@ -946,34 +937,21 @@ describe('server: multi-client broadcast and ordering', () => {
       wsA.send(JSON.stringify({ type: 'run', agent: 'claude', prompt: 'do multi', element }));
       const events: ServerMessage[] = [];
       while (events.length < 3) events.push(await readerA.next());
-      expect(events[2]?.type).toBe('diff'); // A now has a pending, undecided diff
+      expect(events[2]?.type).toBe('diff');
 
-      // The pending diff is project-wide, so B is shown the same undecided
-      // decision even though A is the one that started the run.
-      const pendingForB = await readerB.next();
-      if (pendingForB.type !== 'diff') throw new Error('expected diff');
-      expect(pendingForB.files.length).toBeGreaterThan(0);
-
-      // B's run is refused: a pending diff exists project-wide, not just on A's socket.
-      wsB.send(JSON.stringify({ type: 'run', agent: 'claude', prompt: 'p2', element }));
-      expect(await readerB.next()).toEqual({
-        type: 'error',
-        message: "Accepte ou rejette d'abord les modifications en attente.",
-      });
-
-      wsA.send(JSON.stringify({ type: 'accept' }));
-      expect(await readerA.next()).toEqual({ type: 'diff', files: [] });
       const historyA = await readerA.next();
       if (historyA.type !== 'history') throw new Error('expected history');
       expect(historyA.runs).toHaveLength(1);
 
-      // B, which never accepted or rejected anything itself, still sees both
-      // the cleared diff and the history broadcast.
-      expect(await readerB.next()).toEqual({ type: 'diff', files: [] });
+      // The run belongs to the project, so B is shown the same diff and the
+      // same history without having asked for anything.
+      const diffForB = await readerB.next();
+      if (diffForB.type !== 'diff') throw new Error('expected diff');
+      expect(diffForB.files.length).toBeGreaterThan(0);
       const historyB = await readerB.next();
       if (historyB.type !== 'history') throw new Error('expected history');
       expect(historyB.runs).toHaveLength(1);
-      expect(historyB.runs[0]).toMatchObject({ status: 'accepted', prompt: 'do multi' });
+      expect(historyB.runs[0]).toMatchObject({ status: 'applied', prompt: 'do multi' });
 
       wsA.close();
       wsB.close();
@@ -1329,8 +1307,8 @@ describe('server run cancellation', () => {
   });
 });
 
-describe('server pending diff survival', () => {
-  it('keeps an undecided diff when the panel closes, replays it on reconnect, and can still reject it', async () => {
+describe('server diff survival', () => {
+  it('replays the last run\'s diff to a panel that connects later, and it is still undoable', async () => {
     const cwd = await setupGitRepo();
     const server = createServer({
       port: 0,
@@ -1354,8 +1332,8 @@ describe('server pending diff survival', () => {
       }
       expect(diffForA.type === 'diff' && diffForA.files.length).toBeGreaterThan(0);
 
-      // The user closes the side panel without deciding. Previously this threw
-      // the snapshot away and left the agent's edits unrevertable.
+      // The user closes the side panel. What the run changed must still be
+      // visible, and still undoable, from whatever panel opens next.
       await new Promise<void>((resolve) => {
         wsA.once('close', () => resolve());
         wsA.close();
@@ -1363,16 +1341,18 @@ describe('server pending diff survival', () => {
 
       const { ws: wsC, reader: readerC } = await openSocket(server.port);
       expect((await readerC.next()).type).toBe('hello');
-      expect((await readerC.next()).type).toBe('history');
+      const historyC = await readerC.next();
+      if (historyC.type !== 'history') throw new Error('expected history');
+      expect(historyC.runs).toHaveLength(1);
       const replayed = await readerC.next();
-      if (replayed.type !== 'diff') throw new Error('expected the pending diff to be replayed');
+      if (replayed.type !== 'diff') throw new Error('expected the last diff to be replayed');
       expect(replayed.files.map((file) => file.path).sort()).toEqual(['new.txt', 'tracked.txt']);
 
-      // And the decision still works from the new panel.
-      wsC.send(JSON.stringify({ type: 'reject' }));
-      const restored = await readerC.next();
-      if (restored.type !== 'restored') throw new Error('expected restored');
-      expect(restored.files.sort()).toEqual(['new.txt', 'tracked.txt']);
+      // And the new panel can still take the run back.
+      wsC.send(JSON.stringify({ type: 'undo-run', id: historyC.runs[0]!.id }));
+      const undone = await readerC.next();
+      if (undone.type !== 'run-undone') throw new Error('expected run-undone');
+      expect(undone.files.sort()).toEqual(['new.txt', 'tracked.txt']);
 
       expect(await fs.readFile(path.join(cwd, 'tracked.txt'), 'utf8')).toBe('original content\n');
       await expect(fs.readFile(path.join(cwd, 'new.txt'), 'utf8')).rejects.toThrow();

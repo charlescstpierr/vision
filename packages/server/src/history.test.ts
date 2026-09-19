@@ -10,7 +10,7 @@ function makeRecord(overrides: Partial<Omit<RunRecord, 'id'>> = {}): Omit<RunRec
     selectors: ['#a'],
     createdAt: Date.now(),
     files: ['a.txt'],
-    status: 'accepted',
+    status: 'applied',
     ...overrides,
   };
 }

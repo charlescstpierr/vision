@@ -18,7 +18,10 @@ type Props = {
   undoNotice: string | null;
   /** Server-reported error to show inline next to the history (e.g. a failed `undo-run`). */
   error: string | null;
-  onUndoRun: (id: string) => void;
+  /** Set when the last `undo-run` was refused because a touched file changed since the run. */
+  undoConflict: { id: string; files: string[] } | null;
+  /** Requests an undo of the given run; `force` re-sends it after the user confirms past an `undo-conflict`. */
+  onUndoRun: (id: string, force?: boolean) => void;
   /** True while the tab is being captured, just before the run is sent. */
   capturing: boolean;
   /** The capture sent with the current run, shown so the user sees what the agent saw. */
@@ -59,6 +62,7 @@ export default function RunPanel({
   runs,
   undoNotice,
   error,
+  undoConflict,
   onUndoRun,
   capturing,
   screenshot,
@@ -80,7 +84,7 @@ export default function RunPanel({
     connected && elementSelected && agent !== '' && prompt.trim().length > 0 && !running && !capturing;
 
   const sortedRuns = [...runs].sort((a, b) => b.createdAt - a.createdAt);
-  const mostRecentAcceptedId = sortedRuns.find((r) => r.status === 'accepted')?.id;
+  const mostRecentAppliedId = sortedRuns.find((r) => r.status === 'applied')?.id;
 
   const submit = () => {
     if (!canSend) return;
@@ -186,20 +190,31 @@ export default function RunPanel({
                     padding: '1px 6px',
                     borderRadius: 4,
                     flex: '0 0 auto',
-                    background: run.status === 'accepted' ? '#dcf5e0' : '#eee',
-                    color: run.status === 'accepted' ? '#1f6b2c' : '#666',
+                    background: run.status === 'applied' ? '#dcf5e0' : '#eee',
+                    color: run.status === 'applied' ? '#1f6b2c' : '#666',
                   }}
                 >
-                  {run.status === 'accepted' ? 'accepté' : 'annulé'}
+                  {run.status === 'applied' ? 'appliqué' : 'annulé'}
                 </span>
               </div>
               <div style={{ color: '#666', marginTop: 2 }}>
                 {run.files.length} fichier{run.files.length === 1 ? '' : 's'} · {formatDateTime(run.createdAt)}
               </div>
-              {run.id === mostRecentAcceptedId && (
+              {run.id === mostRecentAppliedId && (
                 <button style={{ marginTop: 4, fontSize: 12 }} onClick={() => onUndoRun(run.id)}>
                   Annuler ce run
                 </button>
+              )}
+              {undoConflict && undoConflict.id === run.id && (
+                <div style={{ marginTop: 4 }}>
+                  <span style={{ fontSize: 12, color: '#a83232' }}>
+                    {undoConflict.files.length} fichier{undoConflict.files.length === 1 ? '' : 's'} modifié
+                    {undoConflict.files.length === 1 ? '' : 's'} depuis ce run : {undoConflict.files.join(', ')}
+                  </span>
+                  <button style={{ marginLeft: 6, fontSize: 12 }} onClick={() => onUndoRun(run.id, true)}>
+                    Annuler quand même
+                  </button>
+                </div>
               )}
             </div>
           ))

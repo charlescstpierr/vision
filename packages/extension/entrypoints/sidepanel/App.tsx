@@ -281,7 +281,8 @@ export default function App() {
         runs={run.runs}
         undoNotice={run.undoNotice}
         error={run.error}
-        onUndoRun={(id) => server.send({ type: 'undo-run', id })}
+        undoConflict={run.undoConflict}
+        onUndoRun={(id, force) => server.send({ type: 'undo-run', id, force })}
         capturing={capturing}
         screenshot={run.screenshot}
         sendLabel={sendLabel}
@@ -289,15 +290,7 @@ export default function App() {
 
       <AgentOutput events={run.events} />
 
-      {run.diff && (
-        <DiffView
-          files={run.diff}
-          error={run.error}
-          restoredFiles={run.restoredFiles}
-          onAccept={() => server.send({ type: 'accept' })}
-          onReject={() => server.send({ type: 'reject' })}
-        />
-      )}
+      {run.diff && <DiffView files={run.diff} error={run.error} />}
 
       {run.proposal && (
         <ProposalView

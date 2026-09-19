@@ -9,6 +9,12 @@ export interface HistoryEntry {
   record: RunRecord;
   /** Byte-exact before/after state of each touched path, so `undo-run` can restore it. */
   files: UndoFile[];
+  /**
+   * `HEAD` as it stood just before the run. An agent may commit while it
+   * works, and restoring file contents alone would leave those commits on the
+   * branch; undo resets back to this first. Null outside a git repo.
+   */
+  headSha: string | null;
 }
 
 /**
@@ -22,9 +28,9 @@ export class RunHistory {
   private entries: HistoryEntry[] = [];
 
   /** Stores a new record, generating its `id`. Returns the stored record. */
-  add(record: Omit<RunRecord, 'id'>, files: UndoFile[]): RunRecord {
+  add(record: Omit<RunRecord, 'id'>, files: UndoFile[], headSha: string | null = null): RunRecord {
     const full: RunRecord = { ...record, id: crypto.randomUUID() };
-    this.entries.unshift({ record: full, files });
+    this.entries.unshift({ record: full, files, headSha });
     if (this.entries.length > MAX_HISTORY) {
       this.entries.length = MAX_HISTORY;
     }

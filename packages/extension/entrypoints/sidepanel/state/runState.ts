@@ -7,11 +7,17 @@ export interface RunState {
   diff: FileDiff[] | null;
   error: string | null;
   exitCode: number | null;
-  restoredFiles: string[] | null;
   /** Past agent runs reported by the server (`list-history`), newest first or not — the UI sorts. */
   runs: RunRecord[];
   /** Set on a `run-undone` server message, cleared when a new run starts. */
   undoNotice: string | null;
+  /**
+   * Set when an `undo-run` was refused because a touched file no longer
+   * matches what the run left behind. Kept so the history row can offer a
+   * forced retry inline; cleared on `start`, `clear`, and `run-undone`
+   * (the run it was about either got undone or the user moved on).
+   */
+  undoConflict: { id: string; files: string[] } | null;
   /**
    * The page key (`overrideKey(tabUrl)`, see `@vizion/shared`) of the tab the
    * current/last run was started against. Captured on `start` so an
@@ -53,9 +59,9 @@ export const initialRunState: RunState = {
   diff: null,
   error: null,
   exitCode: null,
-  restoredFiles: null,
   runs: [],
   undoNotice: null,
+  undoConflict: null,
   pageKey: null,
   proposal: null,
   proposalError: null,
@@ -73,8 +79,8 @@ export function runReducer(state: RunState, action: RunAction): RunState {
         diff: null,
         error: null,
         exitCode: null,
-        restoredFiles: null,
         undoNotice: null,
+        undoConflict: null,
         pageKey: action.pageKey,
         proposal: null,
         proposalError: null,
@@ -109,8 +115,8 @@ export function runReducer(state: RunState, action: RunAction): RunState {
             ...state,
             proposal: { overrides: message.overrides, note: message.note, pageKey: state.pageKey ?? '' },
           };
-        case 'restored':
-          return { ...state, restoredFiles: message.files };
+        case 'undo-conflict':
+          return { ...state, undoConflict: { id: message.id, files: message.files } };
         case 'error':
           return { ...state, running: false, error: message.message };
         case 'history':
@@ -122,9 +128,13 @@ export function runReducer(state: RunState, action: RunAction): RunState {
               run.id === message.id ? { ...run, status: 'undone' as const } : run,
             ),
             undoNotice: `Run annulé : ${message.files.length} fichier(s) restauré(s)`,
+            // A resolved conflict no longer needs its "annuler quand même"
+            // row, whichever way it got resolved (forced retry, or the user
+            // undid a different, more recent run instead).
+            undoConflict: null,
             // Undoing a run resolves whatever error state led to it (e.g. a
-            // reviewer rejecting a bad run), so any stale error banner should
-            // clear along with it.
+            // stale diff the user wanted gone), so any stale error banner
+            // should clear along with it.
             error: null,
           };
         case 'hello':

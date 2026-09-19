@@ -153,7 +153,7 @@ async function getTreeMode(root: string, sha: string | null, relPath: string): P
 
 /**
  * Snapshots the current dirty state of the working tree before an agent
- * run, so `computeDiff`/`restoreSnapshot` can later tell the agent's
+ * run, so `computeDiff` and `buildUndoFiles` can later tell the agent's
  * changes apart from the user's own pre-existing uncommitted edits.
  */
 export async function takeSnapshot(cwd: string, options: TakeSnapshotOptions = {}): Promise<Snapshot> {
@@ -396,78 +396,4 @@ export async function computeDiff(snapshot: Snapshot): Promise<FileDiff[]> {
   }
 }
 
-async function deleteIgnoreEnoent(abs: string): Promise<void> {
-  try {
-    await fs.unlink(abs);
-  } catch (err) {
-    if (!isEnoent(err)) throw err;
-  }
-}
 
-export interface RestoreResult {
-  /** Paths successfully restored to their pre-run state. */
-  restored: string[];
-  /** Paths that could not be restored precisely because they were too large to snapshot. */
-  skipped: string[];
-}
-
-/**
- * Restores `paths` to their pre-run state recorded in `snapshot`:
- * - if the agent committed during the run (current HEAD moved past
- *   `snapshot.headSha`), first `git reset --mixed` back to it, dropping
- *   those commits from the branch while keeping the working tree;
- * - path was already dirty pre-run → write back its saved content and mode
- *   (or delete it if it did not exist / had been deleted before the run);
- * - otherwise, clean at snapshot time → check out from the pre-run HEAD if
- *   it existed there, else delete it (it was newly created by the agent);
- * - a path marked `tooLarge` in the snapshot is skipped (its content was
- *   never captured, so writing it back would silently truncate it) and
- *   returned in `skipped` instead of `restored`.
- * Outside a git repo, reject is unavailable and this returns empty lists.
- */
-export async function restoreSnapshot(snapshot: Snapshot, paths: string[]): Promise<RestoreResult> {
-  if (!snapshot.isGit) return { restored: [], skipped: [] };
-  const root = snapshot.root;
-
-  if (snapshot.headSha) {
-    const currentHeadSha = await getHeadSha(root);
-    if (currentHeadSha && currentHeadSha !== snapshot.headSha) {
-      await execFileAsync('git', ['reset', '--mixed', snapshot.headSha], { cwd: root });
-    }
-  }
-
-  const restored: string[] = [];
-  const skipped: string[] = [];
-  for (const relPath of paths) {
-    const snap = snapshot.files.get(relPath);
-    if (snap?.tooLarge) {
-      skipped.push(relPath);
-      continue;
-    }
-
-    const abs = path.join(root, relPath);
-    if (snap) {
-      if (snap.existed) {
-        await fs.mkdir(path.dirname(abs), { recursive: true });
-        await fs.writeFile(abs, snap.content ?? Buffer.alloc(0));
-        if (!IS_WIN32 && snap.mode !== null) await fs.chmod(abs, snap.mode);
-      } else {
-        await deleteIgnoreEnoent(abs);
-      }
-    } else {
-      const headContent = await getBlobAt(root, snapshot.headSha, relPath);
-      if (headContent !== null) {
-        // Non-null implies snapshot.headSha is non-null too.
-        await execFileAsync('git', ['checkout', snapshot.headSha as string, '--', relPath], { cwd: root });
-        if (!IS_WIN32) {
-          const mode = await getTreeMode(root, snapshot.headSha, relPath);
-          if (mode !== null) await fs.chmod(abs, mode);
-        }
-      } else {
-        await deleteIgnoreEnoent(abs);
-      }
-    }
-    restored.push(relPath);
-  }
-  return { restored, skipped };
-}

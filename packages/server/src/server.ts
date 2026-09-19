@@ -14,7 +14,7 @@ import { parseOverlayProposal } from './overlay.js';
 import { createPairingCode, renderPairingPage } from './pairing.js';
 import { createRunners, detectAvailableAgents } from './runners/index.js';
 import { decodeScreenshot, writeScreenshotFile } from './screenshot.js';
-import { buildUndoFiles, computeDiff, restoreSnapshot, takeSnapshot, type Snapshot } from './snapshot.js';
+import { buildUndoFiles, computeDiff, takeSnapshot } from './snapshot.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -223,29 +223,11 @@ export function createServer(options: CreateServerOptions): VizionServer {
   // `activeRun`: the history is about the shared project, not a connection.
   const history = new RunHistory();
 
-  // The snapshot from the most recently *finished* run (diff already sent),
-  // plus the paths it touched (what `reject` should restore), the diff itself
-  // (what `accept` stores into history) and the run's own metadata
-  // (agent/prompt/selectors, for the RunRecord). Set only once the diff has
-  // been sent, so its presence means "awaiting accept/reject", not "a run is
-  // in progress". Cleared on `accept` or `reject` only.
-  //
-  // Server-wide rather than per-connection, and deliberately NOT cleared when
-  // a socket closes: it is the only record of how to put the project back the
-  // way it was. Keyed by socket, closing the side panel between the diff
-  // arriving and the user deciding threw the snapshot away and left the
-  // agent's edits unrevertable. A reconnecting panel is handed the pending
-  // diff again (see the `connection` handler below) and can still decide.
-  let pendingRun:
-    | {
-        snapshot: Snapshot;
-        touchedPaths: string[];
-        files: FileDiff[];
-        agent: AgentKind;
-        prompt: string;
-        selectors: string[];
-      }
-    | null = null;
+  // The diff of the most recent run, replayed to a panel that connects later.
+  // Informational only: the agent runs in auto-edit mode, so by the time a
+  // diff exists the files are already written and the dev server has already
+  // reloaded. Taking it back is what `undo-run` is for.
+  let lastDiff: FileDiff[] = [];
 
   httpServer.on('upgrade', (req: IncomingMessage, socket: Socket, head: Buffer) => {
     const url = new URL(req.url ?? '', 'http://localhost');
@@ -276,13 +258,6 @@ export function createServer(options: CreateServerOptions): VizionServer {
     ws: WebSocket,
     message: Extract<ClientMessage, { type: 'run' }>,
   ): Promise<void> {
-    // Project-wide, not just this socket: acceptance order must equal
-    // execution order, so a run is refused while ANY connection has an
-    // undecided diff.
-    if (pendingRun) {
-      send(ws, { type: 'error', message: "Accepte ou rejette d'abord les modifications en attente." });
-      return;
-    }
     if (opLock.active === 'undo') {
       send(ws, { type: 'error', message: 'Une opération est déjà en cours.' });
       return;
@@ -406,21 +381,36 @@ export function createServer(options: CreateServerOptions): VizionServer {
           await fs.rm(screenshotDir, { recursive: true, force: true }).catch(() => {});
           screenshotDir = null;
         }
-        // Diff after the run finishes, whether it completed, errored, or was aborted.
+        // Diff after the run finishes, whether it completed, errored, or was
+        // aborted, and record it straight away. The files are already written
+        // by then, so there is nothing to approve -- only something to undo.
         try {
           const files = await computeDiff(snapshot);
-          pendingRun = {
-            snapshot,
-            touchedPaths: files.map((file) => file.path),
-            files,
-            agent: message.agent,
-            prompt: message.prompt,
-            selectors,
-          };
-          // Broadcast, not `send`: the pending diff belongs to the project, so
-          // every open panel shows the same decision (including one that
-          // reconnected while the run was still going).
+          lastDiff = files;
+          let recorded = false;
+          if (files.length > 0) {
+            const undoFiles = await buildUndoFiles(
+              snapshot,
+              files.map((file) => file.path),
+            );
+            history.add(
+              {
+                agent: message.agent,
+                prompt: message.prompt,
+                selectors,
+                createdAt: Date.now(),
+                files: files.map((file) => file.path),
+                status: 'applied',
+              },
+              undoFiles,
+              snapshot.headSha,
+            );
+            recorded = true;
+          }
+          // Diff first: it is the result of the run. The refreshed history
+          // follows only when there is actually a new entry in it.
           broadcast({ type: 'diff', files });
+          if (recorded) broadcast({ type: 'history', runs: history.list() });
         } catch (diffErr) {
           send(ws, {
             type: 'error',
@@ -454,12 +444,12 @@ export function createServer(options: CreateServerOptions): VizionServer {
    * run's "after" state can no longer be trusted once a newer run has
    * touched the same files.
    */
-  async function handleUndoRun(ws: WebSocket, id: string): Promise<void> {
+  async function handleUndoRun(ws: WebSocket, id: string, force: boolean): Promise<void> {
     if (opLock.active === 'undo') {
       send(ws, { type: 'error', message: 'Une opération est déjà en cours.' });
       return;
     }
-    if (activeRun || pendingRun) {
+    if (activeRun) {
       send(ws, { type: 'error', message: "Termine le run en cours d'abord." });
       return;
     }
@@ -472,8 +462,8 @@ export function createServer(options: CreateServerOptions): VizionServer {
       send(ws, { type: 'error', message: 'Ce run a déjà été annulé.' });
       return;
     }
-    const mostRecentAccepted = history.list().find((run) => run.status === 'accepted');
-    if (mostRecentAccepted?.id !== id) {
+    const mostRecentApplied = history.list().find((run) => run.status === 'applied');
+    if (mostRecentApplied?.id !== id) {
       send(ws, { type: 'error', message: "Annule d'abord les runs plus récents." });
       return;
     }
@@ -487,18 +477,35 @@ export function createServer(options: CreateServerOptions): VizionServer {
       const root = stdout.trim();
 
       // Verify every touched file still matches what the run left behind
-      // before writing anything back.
-      for (const file of entry.files) {
-        const abs = path.join(root, file.path);
-        const current = await readFileIfExists(abs);
-        const matches =
-          file.after === null ? current === null : current !== null && current.equals(file.after.content);
-        if (!matches) {
-          send(ws, {
-            type: 'error',
-            message: `Conflit : ${file.path} a été modifié depuis ce run. Annulation impossible.`,
-          });
+      // before writing anything back. A mismatch is reported rather than
+      // refused outright: a formatter running on save is as likely a cause as
+      // a real edit, and the user is the only one who can tell them apart.
+      if (!force) {
+        const diverged: string[] = [];
+        for (const file of entry.files) {
+          const abs = path.join(root, file.path);
+          const current = await readFileIfExists(abs);
+          const matches =
+            file.after === null ? current === null : current !== null && current.equals(file.after.content);
+          if (!matches) diverged.push(file.path);
+        }
+        if (diverged.length > 0) {
+          send(ws, { type: 'undo-conflict', id, files: diverged });
           return;
+        }
+      }
+
+      // Nothing has been written yet, so the conflict check above could still
+      // bail out without a trace. From here on the undo actually happens.
+      //
+      // The agent may have committed while it worked. Restoring file contents
+      // alone would take the edits back but leave those commits on the branch,
+      // so move HEAD back first, keeping the working tree for the restore
+      // below to overwrite.
+      if (entry.headSha) {
+        const { stdout: headOut } = await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: root });
+        if (headOut.trim() !== entry.headSha) {
+          await execFileAsync('git', ['reset', '--mixed', entry.headSha], { cwd: root });
         }
       }
 
@@ -537,56 +544,6 @@ export function createServer(options: CreateServerOptions): VizionServer {
         case 'ping':
           send(ws, { type: 'pong' });
           return;
-        case 'accept': {
-          if (opLock.active === 'undo') {
-            send(ws, { type: 'error', message: 'Une opération est déjà en cours.' });
-            return;
-          }
-          const pending = pendingRun;
-          if (!pending) {
-            send(ws, { type: 'error', message: 'rien à accepter ou rejeter' });
-            return;
-          }
-          pendingRun = null;
-          const undoFiles = await buildUndoFiles(pending.snapshot, pending.touchedPaths);
-          history.add(
-            {
-              agent: pending.agent,
-              prompt: pending.prompt,
-              selectors: pending.selectors,
-              createdAt: Date.now(),
-              files: pending.files.map((file) => file.path),
-              status: 'accepted',
-            },
-            undoFiles,
-          );
-          broadcast({ type: 'diff', files: [] });
-          broadcast({ type: 'history', runs: history.list() });
-          return;
-        }
-        case 'reject': {
-          if (opLock.active === 'undo') {
-            send(ws, { type: 'error', message: 'Une opération est déjà en cours.' });
-            return;
-          }
-          const pending = pendingRun;
-          if (!pending) {
-            send(ws, { type: 'error', message: 'rien à accepter ou rejeter' });
-            return;
-          }
-          pendingRun = null;
-          const { restored, skipped } = await restoreSnapshot(pending.snapshot, pending.touchedPaths);
-          broadcast({ type: 'restored', files: restored });
-          if (skipped.length > 0) {
-            broadcast({
-              type: 'error',
-              message: `Fichiers trop volumineux non restaurés : ${skipped.join(', ')}`,
-            });
-          }
-          broadcast({ type: 'diff', files: [] });
-          broadcast({ type: 'history', runs: history.list() });
-          return;
-        }
         case 'cancel': {
           if (!activeRun) {
             send(ws, { type: 'error', message: 'Aucun run en cours.' });
@@ -602,7 +559,7 @@ export function createServer(options: CreateServerOptions): VizionServer {
           await handleRun(ws, message);
           return;
         case 'undo-run':
-          await handleUndoRun(ws, message.id);
+          await handleUndoRun(ws, message.id, message.force === true);
           return;
         case 'list-history':
           send(ws, { type: 'history', runs: history.list() });
@@ -618,10 +575,8 @@ export function createServer(options: CreateServerOptions): VizionServer {
   wss.on('connection', (ws: WebSocket) => {
     send(ws, { type: 'hello', version: pkg.version, cwd, agents: detectedAgents });
     send(ws, { type: 'history', runs: history.list() });
-    // A run finished while no panel was open (or this panel reconnected after
-    // one did): replay the undecided diff so it can still be accepted or
-    // rejected rather than being stranded.
-    if (pendingRun) send(ws, { type: 'diff', files: pendingRun.files });
+    // Show a panel that connects later what the last run changed.
+    if (lastDiff.length > 0) send(ws, { type: 'diff', files: lastDiff });
 
     ws.on('message', (data: Buffer) => {
       let message: ClientMessage;
@@ -640,8 +595,6 @@ export function createServer(options: CreateServerOptions): VizionServer {
       // next run start against a half-finished tree and then overwrite
       // `pendingRun` from the old one. `handleRun`'s `finally` owns that.
       if (activeRun?.ws === ws) activeRun.controller.abort();
-      // `pendingRun` deliberately survives: it is what makes the agent's edits
-      // revertable, and the next panel to connect is handed it again.
     });
   });
 

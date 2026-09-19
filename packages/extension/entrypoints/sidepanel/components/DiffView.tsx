@@ -4,9 +4,6 @@ import type { FileDiff } from '@vizion/shared';
 type Props = {
   files: FileDiff[];
   error: string | null;
-  restoredFiles: string[] | null;
-  onAccept: () => void;
-  onReject: () => void;
 };
 
 const badgeColors: Record<FileDiff['status'], { bg: string; fg: string }> = {
@@ -26,11 +23,11 @@ const preStyle: CSSProperties = {
   whiteSpace: 'pre',
 };
 
-export default function DiffView({ files, error, restoredFiles, onAccept, onReject }: Props) {
+export default function DiffView({ files, error }: Props) {
   return (
     <div style={{ marginTop: 12, border: '1px solid #ddd', borderRadius: 8, padding: 10 }}>
       <strong style={{ fontSize: 13 }}>
-        Modifications ({files.length} fichier{files.length === 1 ? '' : 's'})
+        Modifié par le dernier run ({files.length} fichier{files.length === 1 ? '' : 's'})
       </strong>
 
       {files.length === 0 && (
@@ -67,18 +64,6 @@ export default function DiffView({ files, error, restoredFiles, onAccept, onReje
           </div>
         );
       })}
-
-      <div style={{ marginTop: 10, display: 'flex', gap: 8 }}>
-        <button onClick={onAccept}>Accepter</button>
-        <button onClick={onReject}>Rejeter</button>
-      </div>
-
-      {restoredFiles && (
-        <p style={{ fontSize: 12, color: '#1f6b2c', marginTop: 8 }}>
-          {restoredFiles.length} fichier{restoredFiles.length === 1 ? '' : 's'} restauré
-          {restoredFiles.length === 1 ? '' : 's'}.
-        </p>
-      )}
 
       {error && <p style={{ fontSize: 12, color: '#a83232', marginTop: 8 }}>{error}</p>}
     </div>
