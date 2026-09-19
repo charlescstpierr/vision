@@ -4,6 +4,7 @@ import type { AgentKind, RunRecord } from '@vizion/shared';
 type Props = {
   agents: AgentKind[];
   connected: boolean;
+  isSourceMode: boolean;
   elementSelected: boolean;
   running: boolean;
   prompt: string;
@@ -39,6 +40,7 @@ const fieldStyle: CSSProperties = {
 export default function RunPanel({
   agents,
   connected,
+  isSourceMode,
   elementSelected,
   running,
   prompt,
@@ -114,6 +116,14 @@ export default function RunPanel({
           onKeyDown={onKeyDown}
         />
       </label>
+
+      {connected && (
+        <p style={{ fontSize: 12, color: '#444', marginTop: 8 }}>
+          {isSourceMode
+            ? "Mode Source : l'agent modifiera les fichiers du projet."
+            : "Mode Overlay : l'agent proposera des overrides (styles / texte) pour cette page."}
+        </p>
+      )}
 
       <button style={{ marginTop: 8 }} disabled={!canSend} onClick={submit}>
         Envoyer à l'agent

@@ -975,3 +975,106 @@ describe('server: multi-client broadcast and ordering', () => {
     }
   });
 });
+
+class OverlayRunner implements AgentRunner {
+  readonly kind = 'claude' as const;
+  seenCwd: string | null = null;
+  constructor(private readonly text: string) {}
+
+  isAvailable(): Promise<boolean> {
+    return Promise.resolve(true);
+  }
+
+  async *run(req: { cwd: string }): AsyncIterable<AgentEvent> {
+    this.seenCwd = req.cwd;
+    yield { type: 'started', agent: 'claude' };
+    yield { type: 'text', text: this.text };
+    yield { type: 'done', exitCode: 0 };
+  }
+}
+
+describe('server overlay mode', () => {
+  it('runs in a fresh temp dir, sends overlay-proposal (no diff), and removes the temp dir after', async () => {
+    const projectCwd = await setupGitRepo();
+    const runner = new OverlayRunner(
+      [
+        'Making it blue.',
+        '```json',
+        '[{ "selector": "#btn", "kind": "style", "property": "color", "value": "blue" }]',
+        '```',
+      ].join('\n'),
+    );
+    const server = createServer({
+      port: 0,
+      cwd: projectCwd,
+      runners: [runner],
+      allowedOriginPrefixes: [TEST_ORIGIN],
+      token: TEST_TOKEN,
+    });
+    await server.start();
+
+    try {
+      const { ws, reader } = await openSocket(server.port);
+      await reader.next(); // hello
+      await reader.next(); // history
+
+      ws.send(JSON.stringify({ type: 'run', agent: 'claude', prompt: 'make it blue', element, mode: 'overlay' }));
+
+      const received: ServerMessage[] = [];
+      while (received.length < 4) {
+        received.push(await reader.next());
+      }
+      expect(received[0]).toEqual({ type: 'event', event: { type: 'started', agent: 'claude' } });
+      expect(received[3]).toEqual({
+        type: 'overlay-proposal',
+        overrides: [{ selector: '#btn', kind: 'style', property: 'color', value: 'blue' }],
+        note: 'Making it blue.',
+      });
+      expect(received.some((message) => message.type === 'diff')).toBe(false);
+
+      expect(runner.seenCwd).not.toBeNull();
+      expect(runner.seenCwd).not.toBe(projectCwd);
+      await expect(fs.stat(runner.seenCwd as string)).rejects.toThrow();
+
+      ws.close();
+    } finally {
+      await server.stop();
+      await fs.rm(projectCwd, { recursive: true, force: true });
+    }
+  });
+
+  it('sends an error when the agent replies with prose only', async () => {
+    const projectCwd = await setupGitRepo();
+    const runner = new OverlayRunner('Sorry, I cannot help with that.');
+    const server = createServer({
+      port: 0,
+      cwd: projectCwd,
+      runners: [runner],
+      allowedOriginPrefixes: [TEST_ORIGIN],
+      token: TEST_TOKEN,
+    });
+    await server.start();
+
+    try {
+      const { ws, reader } = await openSocket(server.port);
+      await reader.next(); // hello
+      await reader.next(); // history
+
+      ws.send(JSON.stringify({ type: 'run', agent: 'claude', prompt: 'make it blue', element, mode: 'overlay' }));
+
+      const received: ServerMessage[] = [];
+      while (received.length < 4) {
+        received.push(await reader.next());
+      }
+      expect(received[3]).toEqual({
+        type: 'error',
+        message: "L'agent n'a pas renvoyé de proposition exploitable.",
+      });
+
+      ws.close();
+    } finally {
+      await server.stop();
+      await fs.rm(projectCwd, { recursive: true, force: true });
+    }
+  });
+});

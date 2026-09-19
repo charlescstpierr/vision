@@ -1,5 +1,27 @@
 import { describe, expect, it } from 'vitest';
-import { parseCodexLine } from './codex.js';
+import { buildCodexArgs, parseCodexLine } from './codex.js';
+
+describe('buildCodexArgs', () => {
+  it('uses --full-auto without a sandbox for a normal (non-overlay) run', () => {
+    const args = buildCodexArgs('/home/user/project', false);
+    expect(args).toEqual(['exec', '--json', '--full-auto', '-C', '/home/user/project', '-']);
+  });
+
+  it('adds --skip-git-repo-check alongside the read-only sandbox for overlay runs', () => {
+    const args = buildCodexArgs('/tmp/vizion-overlay-abc', true);
+    expect(args).toEqual([
+      'exec',
+      '--json',
+      '--sandbox',
+      'read-only',
+      '--skip-git-repo-check',
+      '-C',
+      '/tmp/vizion-overlay-abc',
+      '-',
+    ]);
+    expect(args).toContain('--skip-git-repo-check');
+  });
+});
 
 describe('parseCodexLine', () => {
   it('turns an agent_message item into a text event', () => {

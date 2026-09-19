@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import type { FileDiff, RunRecord, ServerMessage } from '@vizion/shared';
+import type { FileDiff, OverrideProposal, RunRecord, ServerMessage } from '@vizion/shared';
 import { initialRunState, runReducer, type RunState } from './runState.js';
 
-function start(state: RunState = initialRunState): RunState {
-  return runReducer(state, { type: 'start', agent: 'codex', prompt: 'do it' });
+const PAGE_KEY = 'https://example.com/page';
+
+function start(state: RunState = initialRunState, pageKey = PAGE_KEY): RunState {
+  return runReducer(state, { type: 'start', agent: 'codex', prompt: 'do it', pageKey });
 }
 
 describe('runReducer', () => {
@@ -19,7 +21,15 @@ describe('runReducer', () => {
       restoredFiles: null,
       runs: [],
       undoNotice: null,
+      pageKey: PAGE_KEY,
+      proposal: null,
+      proposalError: null,
     });
+  });
+
+  it('start records the page key the run is bound to', () => {
+    const state = start(initialRunState, 'https://example.com/other');
+    expect(state.pageKey).toBe('https://example.com/other');
   });
 
   it('appends text/tool/started events while keeping running true', () => {
@@ -69,7 +79,7 @@ describe('runReducer', () => {
   it('start resets restoredFiles from a previous reject', () => {
     let state = start();
     state = runReducer(state, { type: 'server', message: { type: 'restored', files: ['a.ts'] } });
-    state = runReducer(state, { type: 'start', agent: 'codex', prompt: 'again' });
+    state = runReducer(state, { type: 'start', agent: 'codex', prompt: 'again', pageKey: PAGE_KEY });
     expect(state.restoredFiles).toBeNull();
   });
 
@@ -141,5 +151,69 @@ describe('runReducer', () => {
     expect(state.undoNotice).not.toBeNull();
     state = start(state);
     expect(state.undoNotice).toBeNull();
+  });
+
+  it('overlay-proposal message stores the proposed overrides and note', () => {
+    const overrides: OverrideProposal[] = [
+      { selector: '#hero', kind: 'style', property: 'color', value: 'red' },
+    ];
+    let state = start();
+    state = runReducer(state, {
+      type: 'server',
+      message: { type: 'overlay-proposal', overrides, note: 'Ceci devrait aider' },
+    });
+    expect(state.proposal).toEqual({ overrides, note: 'Ceci devrait aider', pageKey: PAGE_KEY });
+  });
+
+  it('tags the proposal with the page key captured at start, not any later one', () => {
+    const overrides: OverrideProposal[] = [{ selector: '#hero', kind: 'text', value: 'Bonjour' }];
+    let state = start(initialRunState, 'https://example.com/a');
+    state = runReducer(state, { type: 'server', message: { type: 'overlay-proposal', overrides } });
+    expect(state.proposal?.pageKey).toBe('https://example.com/a');
+  });
+
+  it('proposal-error records a message but keeps the proposal', () => {
+    const overrides: OverrideProposal[] = [{ selector: '#hero', kind: 'text', value: 'Bonjour' }];
+    let state = start();
+    state = runReducer(state, { type: 'server', message: { type: 'overlay-proposal', overrides } });
+    state = runReducer(state, { type: 'proposal-error', message: 'quota dépassé' });
+    expect(state.proposal).not.toBeNull();
+    expect(state.proposalError).toBe('quota dépassé');
+  });
+
+  it('clear-proposal also clears a pending proposal error', () => {
+    let state = runReducer(initialRunState, { type: 'proposal-error', message: 'boom' });
+    state = runReducer(state, { type: 'clear-proposal' });
+    expect(state.proposalError).toBeNull();
+  });
+
+  it('starting a new run clears a previous proposal', () => {
+    const overrides: OverrideProposal[] = [{ selector: '#hero', kind: 'text', value: 'Bonjour' }];
+    let state = runReducer(initialRunState, {
+      type: 'server',
+      message: { type: 'overlay-proposal', overrides },
+    });
+    expect(state.proposal).not.toBeNull();
+    state = start(state);
+    expect(state.proposal).toBeNull();
+  });
+
+  it('clear resets the proposal', () => {
+    const overrides: OverrideProposal[] = [{ selector: '#hero', kind: 'text', value: 'Bonjour' }];
+    let state = runReducer(initialRunState, {
+      type: 'server',
+      message: { type: 'overlay-proposal', overrides },
+    });
+    state = runReducer(state, { type: 'clear' });
+    expect(state.proposal).toBeNull();
+  });
+
+  it('clear-proposal clears only the proposal, leaving the rest of the state intact', () => {
+    const overrides: OverrideProposal[] = [{ selector: '#hero', kind: 'text', value: 'Bonjour' }];
+    let state = start();
+    state = runReducer(state, { type: 'server', message: { type: 'overlay-proposal', overrides } });
+    state = runReducer(state, { type: 'clear-proposal' });
+    expect(state.proposal).toBeNull();
+    expect(state.running).toBe(true);
   });
 });

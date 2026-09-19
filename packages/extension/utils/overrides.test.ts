@@ -28,6 +28,26 @@ describe('buildOverrideCss', () => {
   it('returns an empty string for no overrides', () => {
     expect(buildOverrideCss([])).toBe('');
   });
+
+  it('skips a style override whose value could inject a new rule/declaration', () => {
+    const css = buildOverrideCss([style('.btn', 'color', 'red; } .evil { color: blue')]);
+    expect(css).toBe('');
+  });
+
+  it('skips a style override whose property is not a valid CSS identifier', () => {
+    const css = buildOverrideCss([style('.btn', 'color: red } .evil { color', 'blue')]);
+    expect(css).toBe('');
+  });
+
+  it('does not double up an already-present !important in the value', () => {
+    const css = buildOverrideCss([style('.btn', 'color', 'red !important')]);
+    expect(css).toBe('.btn { color: red !important; }');
+  });
+
+  it('allows a custom property name', () => {
+    const css = buildOverrideCss([style('.btn', '--brand', 'red')]);
+    expect(css).toBe('.btn { --brand: red !important; }');
+  });
 });
 
 describe('applyOverrides', () => {

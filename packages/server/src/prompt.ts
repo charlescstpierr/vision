@@ -63,3 +63,46 @@ export function buildPrompt(req: RunRequest & { elements?: ElementContext[] }, c
     'Find the source file that renders this element, apply the requested change, and touch nothing else.',
   ].join('\n');
 }
+
+/**
+ * Builds the prompt for an overlay-mode run: same element description as
+ * `buildPrompt`, but the agent runs in an empty throwaway directory, cannot
+ * touch any files, and must answer with a JSON array of style/text overrides
+ * scoped to the selected element(s) instead of editing source.
+ */
+export function buildOverlayPrompt(req: RunRequest & { elements?: ElementContext[] }, cwd: string): string {
+  const { element, pageUrl, prompt, elements } = req;
+  const list = elements && elements.length > 1 ? elements : [element];
+  const selectors = list.map((el) => el.selector);
+  // JSON.stringify (not manual quoting) so a selector containing backslashes
+  // or quotes (e.g. `#\31 23` from CSS.escape) round-trips as a valid JSON
+  // string in the prompt the agent is told to copy back verbatim.
+  const selectorList = selectors.map((selector) => JSON.stringify(selector)).join(', ');
+
+  const descriptionLines =
+    list.length > 1
+      ? list.flatMap((el, index) => {
+          const lines = describeElementLines(el, MAX_OUTER_HTML_LENGTH_MULTI, 'Selector');
+          return [`${index + 1}. ${lines[0]}`, ...lines.slice(1).map((line) => `   ${line}`)];
+        })
+      : describeElementLines(element, MAX_OUTER_HTML_LENGTH, 'Selected element');
+
+  const header =
+    list.length > 1
+      ? [`Project: ${cwd}.`, `Page: ${pageUrl}.`, `Selected elements (${list.length}):`, ...descriptionLines]
+      : [`Project: ${cwd}.`, `Page: ${pageUrl}.`, ...descriptionLines];
+
+  return [
+    ...header,
+    '',
+    `Task: ${prompt}`,
+    '',
+    'You are running in OVERLAY MODE, inside an empty, throwaway sandbox directory: it is not the real project. You cannot edit any files and must not use any tools (no Bash, Edit, Write, MultiEdit, or similar) — just answer in text.',
+    `Reply with ONLY a fenced \`\`\`json code block containing a JSON array of override objects scoped to the selector(s) above (${selectorList}), each one of:`,
+    '  { "selector": "<one of the selectors above>", "kind": "style", "property": "<css-property>", "value": "<css-value>" }',
+    '  { "selector": "<one of the selectors above>", "kind": "text", "value": "<new text content>" }',
+    `"selector" must be exactly one of: ${selectorList}.`,
+    'Prefer as few, precise overrides as possible.',
+    'You may put one short sentence of context before the code block (an optional note), but the code block itself must contain ONLY the JSON array.',
+  ].join('\n');
+}

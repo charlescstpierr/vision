@@ -35,11 +35,28 @@ type TextOverrideRecord = { el: WeakRef<Element>; original: string };
  */
 const appliedTextOverrides = new Map<string, TextOverrideRecord>();
 
-/** Renders the style overrides as one `!important` CSS rule per override. */
+/** A CSS custom-property or ordinary (optionally vendor-prefixed) property name. */
+const VALID_PROPERTY = /^(--[a-z0-9-]+|-?[a-z][a-z0-9-]*)$/i;
+
+/** Characters that would let a value break out of its declaration/rule. */
+const UNSAFE_VALUE_CHARS = /[;{}<>\n]/;
+
+/** Strips a trailing `!important` from a value; the rule already adds its own. */
+function stripImportant(value: string): string {
+  return value.replace(/\s*!\s*important\s*$/i, '').trim();
+}
+
+/**
+ * Renders the style overrides as one `!important` CSS rule per override,
+ * skipping any override whose property or value could break out of the
+ * generated rule (e.g. inject a new selector/declaration) when written
+ * straight into a `<style>` tag.
+ */
 export function buildOverrideCss(overrides: Override[]): string {
   return overrides
     .filter((override): override is Extract<Override, { kind: 'style' }> => override.kind === 'style')
-    .map((override) => `${override.selector} { ${override.property}: ${override.value} !important; }`)
+    .filter((override) => VALID_PROPERTY.test(override.property) && !UNSAFE_VALUE_CHARS.test(override.value))
+    .map((override) => `${override.selector} { ${override.property}: ${stripImportant(override.value)} !important; }`)
     .join('\n');
 }
 

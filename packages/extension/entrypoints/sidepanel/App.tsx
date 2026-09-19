@@ -1,9 +1,11 @@
 import { useEffect, useReducer, useRef, useState } from 'react';
 import type { AgentKind, ContentToPanelMessage, ElementContext, PanelToContentMessage } from '@vizion/shared';
+import { overrideKey } from '@vizion/shared';
 import ElementCard from './components/ElementCard.js';
 import RunPanel from './components/RunPanel.js';
 import AgentOutput from './components/AgentOutput.js';
 import DiffView from './components/DiffView.js';
+import ProposalView from './components/ProposalView.js';
 import OverridePanel from './components/OverridePanel.js';
 import QuickStyles from './components/QuickStyles.js';
 import SettingsPanel from './components/Settings.js';
@@ -13,6 +15,8 @@ import { useApplyChange } from './hooks/useApplyChange.js';
 import { useSettings } from './hooks/useSettings.js';
 import { initialRunState, runReducer } from './state/runState.js';
 import { isLocalUrl } from '../../utils/url.js';
+import { addOverrides } from '../../utils/override-store.js';
+import { proposalToOverrides } from '../../utils/proposal.js';
 
 async function sendToActiveTab(message: PanelToContentMessage): Promise<unknown> {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -98,9 +102,35 @@ export default function App() {
   };
 
   const runAgent = (agent: AgentKind, promptText: string) => {
-    if (elements.length === 0) return;
-    dispatch({ type: 'start', agent, prompt: promptText });
-    server.send({ type: 'run', agent, prompt: promptText, element: elements[0]!, elements });
+    if (elements.length === 0 || !tabUrl) return;
+    dispatch({ type: 'start', agent, prompt: promptText, pageKey: overrideKey(tabUrl) });
+    server.send({
+      type: 'run',
+      agent,
+      prompt: promptText,
+      element: elements[0]!,
+      elements,
+      mode: isSourceMode ? 'source' : 'overlay',
+    });
+  };
+
+  const applyProposal = async () => {
+    if (!run.proposal) return;
+    const overrides = proposalToOverrides(run.proposal.overrides, Date.now(), () => crypto.randomUUID());
+    try {
+      // Apply under the page the proposal was generated for, captured when
+      // the run started — not the tab that happens to be active now.
+      await addOverrides(run.proposal.pageKey, overrides);
+      setNotice(`${overrides.length} override(s) appliqué(s)`);
+      dispatch({ type: 'clear-proposal' });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      dispatch({ type: 'proposal-error', message });
+    }
+  };
+
+  const ignoreProposal = () => {
+    dispatch({ type: 'clear-proposal' });
   };
 
   const editText = (selector: string) => {
@@ -180,7 +210,8 @@ export default function App() {
 
       <RunPanel
         agents={server.hello?.agents ?? []}
-        connected={isSourceMode}
+        connected={connected}
+        isSourceMode={isSourceMode}
         elementSelected={elements.length > 0}
         running={run.running}
         prompt={prompt}
@@ -202,6 +233,18 @@ export default function App() {
           restoredFiles={run.restoredFiles}
           onAccept={() => server.send({ type: 'accept' })}
           onReject={() => server.send({ type: 'reject' })}
+        />
+      )}
+
+      {run.proposal && (
+        <ProposalView
+          overrides={run.proposal.overrides}
+          note={run.proposal.note}
+          pageKey={run.proposal.pageKey}
+          currentPageKey={tabUrl ? overrideKey(tabUrl) : undefined}
+          error={run.proposalError}
+          onApply={() => void applyProposal()}
+          onIgnore={ignoreProposal}
         />
       )}
 
