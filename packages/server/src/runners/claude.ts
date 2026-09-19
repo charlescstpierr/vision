@@ -96,8 +96,13 @@ export class ClaudeRunner implements AgentRunner {
     req: RunRequest & { cwd: string; mode?: RunMode; readOnly?: boolean; screenshotPath?: string },
     signal: AbortSignal,
   ): AsyncIterable<AgentEvent> {
-    const basePrompt = req.mode === 'overlay' ? buildOverlayPrompt(req, req.cwd) : buildPrompt(req, req.cwd);
-    const prompt = req.screenshotPath ? appendScreenshotNote(basePrompt, req.screenshotPath) : basePrompt;
+    const basePrompt =
+      req.mode === 'overlay'
+        ? buildOverlayPrompt(req, req.cwd, { allowScreenshotRead: Boolean(req.screenshotPath) })
+        : buildPrompt(req, req.cwd);
+    const prompt = req.screenshotPath
+      ? appendScreenshotNote(basePrompt, req.screenshotPath, { readOnly: req.readOnly })
+      : basePrompt;
     // --verbose is required by the CLI whenever --print is combined with
     // --output-format stream-json (verified: `claude -p --output-format
     // stream-json ...` without --verbose exits with "requires --verbose").

@@ -150,6 +150,15 @@ describe('buildOverlayPrompt', () => {
     expect(prompt).toContain(encoded);
     expect(JSON.parse(encoded)).toBe(trickySelector);
   });
+
+  it('allows the Read tool for the screenshot instead of forbidding all tools when allowScreenshotRead is set', () => {
+    const req = makeRequest();
+    const prompt = buildOverlayPrompt(req, '/tmp/proj', { allowScreenshotRead: true });
+
+    expect(prompt).toContain('cannot edit any files');
+    expect(prompt).toContain('Do not use any tool except as allowed below');
+    expect(prompt).not.toContain('must not use any tools');
+  });
 });
 
 describe('appendScreenshotNote', () => {
@@ -159,5 +168,29 @@ describe('appendScreenshotNote', () => {
     expect(result).toContain(
       'A screenshot of the selected element is saved at /tmp/vizion-shot-abc/vizion-shot-123.png. View it before deciding what to change.',
     );
+  });
+
+  it('allows only the Read tool for the screenshot when readOnly is set', () => {
+    const result = appendScreenshotNote('Task: do it', '/tmp/vizion-shot-abc/vizion-shot-123.png', {
+      readOnly: true,
+    });
+    expect(result).toContain('Task: do it');
+    expect(result).toContain(
+      'You may use the Read tool ONLY to view the screenshot saved at /tmp/vizion-shot-abc/vizion-shot-123.png; use no other tool and edit nothing.',
+    );
+    expect(result).not.toContain('View it before deciding what to change.');
+  });
+});
+
+describe('overlay prompt with screenshot (readOnly runs)', () => {
+  it('contains the Read-only-for-screenshot sentence and drops the unconditional no-tools sentence', () => {
+    const req = makeRequest();
+    const base = buildOverlayPrompt(req, '/tmp/proj', { allowScreenshotRead: true });
+    const prompt = appendScreenshotNote(base, '/tmp/shot.png', { readOnly: true });
+
+    expect(prompt).toContain(
+      'You may use the Read tool ONLY to view the screenshot saved at /tmp/shot.png; use no other tool and edit nothing.',
+    );
+    expect(prompt).not.toContain('must not use any tools');
   });
 });
