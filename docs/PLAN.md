@@ -46,7 +46,8 @@ vizion/
 ### 3.2 Serveur local (`packages/server`)
 
 - Démarré par `npx vizion` dans le dossier du projet. Écoute sur `127.0.0.1:7331` (configurable).
-- Endpoints: `GET /health` (version, cwd, agents disponibles), WebSocket `/ws` pour les sessions d'édition.
+- Endpoints: `GET /health` (version, cwd, agents disponibles), `GET /pair?c=<code>` (page d'appairage), WebSocket `/ws` pour les sessions d'édition.
+- **Appairage**: `vizion` affiche au démarrage une URL `/pair?c=<code>`. La page sert le jeton, le port, le chemin du projet et la version dans une balise `<script type="application/json">`; le content script la lit et l'enregistre comme appairage *en attente*, que le panneau fait confirmer à l'utilisateur. Le contenu d'une page n'étant jamais fiable, la lecture exige quatre conditions: code correct (comparaison à temps constant), document de premier niveau (avec `X-Frame-Options: DENY`, pour qu'une page distante ne puisse pas encadrer l'URL et récolter le jeton), origine loopback, et validation de tous les champs. La confirmation nomme le dossier du projet: une charge forgée ne peut au pire que déclencher une invite pour un projet que l'utilisateur ne reconnaît pas. Le collage manuel du jeton reste un repli.
 - **AgentRunner** (interface): `run(request) → AsyncIterable<AgentEvent>`. Deux implémentations:
   - `CodexRunner`: lance `codex` en mode non interactif (`codex exec`), lit stdout en streaming.
   - `ClaudeRunner`: lance `claude -p --output-format stream-json`, lit les événements.

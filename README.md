@@ -37,10 +37,19 @@ pnpm -r build
 
 **Charger l'extension :**
 
-- **Edge** : Ouvre `edge://extensions`, active le mode développeur, clique sur « Charger l'extension non empaquetée », sélectionne `packages/extension/.output/chrome-mv3`.
-- **Chrome** : Ouvre `chrome://extensions`, active le mode développeur, clique sur « Charger l'extension non empaquetée », sélectionne `packages/extension/.output/chrome-mv3`.
+À chaque tag `v*`, la CI publie une GitHub Release avec les archives pré-compilées. **Aucune release n'existe pour le moment** : en attendant, compile depuis les sources (voir ci-dessous).
 
-Pour une build spécifique à Edge, lance `pnpm --filter @vizion/extension build:edge` (produit dans `.output/edge-mv3`).
+Quand une release sera disponible :
+1. Va sur la page [Releases](https://github.com/charlescstpierr/vision/releases).
+2. Télécharge `vizion-extension-chrome-<version>.zip` (Chrome) ou `vizion-extension-edge-<version>.zip` (Edge).
+3. Décompresse l'archive.
+4. Ouvre `edge://extensions` (Edge) ou `chrome://extensions` (Chrome), active le mode développeur.
+5. Clique sur « Charger l'extension non empaquetée », sélectionne le dossier décompressé.
+
+**Depuis les sources :**
+
+- **Edge** : Lance `pnpm --filter @vizion/extension build:edge` (produit dans `.output/edge-mv3`), puis ouvre `edge://extensions`, active le mode développeur, clique sur « Charger l'extension non empaquetée », sélectionne ce dossier.
+- **Chrome** : Lance `pnpm -r build`, puis ouvre `chrome://extensions`, active le mode développeur, clique sur « Charger l'extension non empaquetée », sélectionne `packages/extension/.output/chrome-mv3`.
 
 ## Démarrer le serveur local
 
@@ -60,7 +69,23 @@ npx @charlescstpierr/vizion
 
 Le serveur affiche les agents détectés et se lie uniquement à `127.0.0.1`.
 
-**Appairage.** Au démarrage, le serveur affiche un jeton d'appairage (conservé dans `~/.vizion/token`). Ouvre la section « Réglages » du panneau latéral, colle le jeton, et ajuste le port si tu as utilisé `--port`. C'est à faire une seule fois : sans ce jeton, aucune extension ne peut parler au serveur.
+**Appairage.** Au démarrage, le serveur affiche une URL d'appairage (le jeton sous-jacent reste conservé dans `~/.vizion/token`) :
+
+```
+Appairage — ouvre cette URL dans le navigateur où Vizion est installé :
+  http://127.0.0.1:7331/pair?c=<code>
+```
+
+1. Ouvre cette URL dans le navigateur où l'extension est installée. La page affiche le chemin du projet et le port.
+2. L'extension détecte cette page automatiquement. Ouvre le panneau latéral Vizion : tu verras un encadré « Appairer Vizion ? » avec les détails du projet et du serveur.
+3. Clique « Appairer ». C'est tout.
+
+**Sécurité :**
+- Le code `c=` dans l'URL n'est connu que de ton terminal et change à chaque redémarrage du serveur.
+- L'extension n'accepte cette page que si elle provient de `127.0.0.1`/`localhost` et qu'elle est la page principale de l'onglet (pas dans une iframe).
+- La confirmation dans le panneau te permet de vérifier le chemin du projet avant que l'extension ne commence à communiquer avec le serveur.
+
+**Alternative (manuel) :** Si tu préfères ou en cas de problème, tu peux aussi ouvrir la section « Réglages » du panneau latéral et coller manuellement le jeton d'appairage affiché au démarrage du serveur.
 
 ## Aider l'agent à trouver le fichier (optionnel)
 
@@ -112,7 +137,7 @@ Architecture et plan de mise en œuvre : [docs/PLAN.md](docs/PLAN.md)
 
 | Problème | Solution |
 |-------|----------|
-| « Serveur non démarré » dans le panneau latéral | Démarre le serveur (voir « Démarrer le serveur local »), vérifie que le jeton d'appairage est collé dans les réglages et que le port correspond. |
+| « Serveur non démarré » dans le panneau latéral | Démarre le serveur (voir « Démarrer le serveur local »), vérifie l'appairage depuis le panneau latéral et que le port correspond. |
 | « Recharge la page pour activer Vizion dessus. » | Le content script ne s'est pas chargé. Recharge la page, ou réinstalle l'extension. |
 | Aucun agent détecté | Installe le CLI `codex` ou `claude`, vérifie qu'il est sur le PATH, redémarre le serveur. |
 | Rejeter ne fait rien, diff vide | Les fonctionnalités de diff et de rejet nécessitent que ton projet soit un dépôt git. |
@@ -120,3 +145,5 @@ Architecture et plan de mise en œuvre : [docs/PLAN.md](docs/PLAN.md)
 | « Run interrompu : délai de 10 min dépassé. » | L'agent a dépassé la limite et a été arrêté pour ne pas bloquer le projet. Révise le diff partiel, puis relance avec une demande plus étroite. |
 | « Accepte ou rejette d'abord les modifications en attente. » | Un diff d'un run précédent attend toujours ta décision. Rouvre le panneau : il te sera représenté à la connexion. |
 | Un diff en attente disparaît quand même | Il survit à la fermeture du panneau, mais pas au redémarrage du serveur. Décide avant d'arrêter `vizion`, ou reviens en arrière avec git. |
+| Code d'appairage invalide | Le code `c=` change à chaque démarrage du serveur. Utilise l'URL affichée par le serveur en cours d'exécution, pas une ancienne. |
+| La page d'appairage reste sur « En attente de l'extension… » | L'extension n'est pas installée dans ce navigateur, ou la page a été ouverte avant son installation. Recharge la page. |
