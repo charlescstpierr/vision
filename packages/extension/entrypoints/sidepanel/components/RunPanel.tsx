@@ -80,6 +80,9 @@ export default function RunPanel({
   }, [agents, agent]);
 
   const hasAgents = agents.length > 0;
+  // A `<select>` is only worth showing when there's an actual choice to make;
+  // with zero or one detected agent it's just friction for nothing.
+  const multipleAgents = agents.length > 1;
   const canSend =
     connected && elementSelected && agent !== '' && prompt.trim().length > 0 && !running && !capturing;
 
@@ -100,26 +103,23 @@ export default function RunPanel({
 
   return (
     <div style={{ marginTop: 12 }}>
-      <label style={{ fontSize: 12, color: '#444', display: 'block' }}>
-        Agent
-        <select
-          style={fieldStyle}
-          value={agent}
-          disabled={!hasAgents}
-          onChange={(e) => setAgent(e.target.value as AgentKind)}
-        >
-          {!hasAgents && <option value="">Aucun agent disponible</option>}
-          {agents.map((a) => (
-            <option key={a} value={a}>
-              {a}
-            </option>
-          ))}
-        </select>
-      </label>
-      {!hasAgents && (
-        <p style={{ fontSize: 12, color: '#a83232', marginTop: 4 }}>
-          Aucun CLI d'agent détecté. Installe codex ou claude.
-        </p>
+      {multipleAgents ? (
+        <label style={{ fontSize: 12, color: '#444', display: 'block' }}>
+          Agent
+          <select style={fieldStyle} value={agent} onChange={(e) => setAgent(e.target.value as AgentKind)}>
+            {agents.map((a) => (
+              <option key={a} value={a}>
+                {a}
+              </option>
+            ))}
+          </select>
+        </label>
+      ) : (
+        !hasAgents && (
+          <p style={{ fontSize: 12, color: '#a83232', marginTop: 4 }}>
+            Aucun CLI d'agent détecté. Installe codex ou claude.
+          </p>
+        )
       )}
 
       <label style={{ fontSize: 12, color: '#444', display: 'block', marginTop: 10 }}>
@@ -158,10 +158,11 @@ export default function RunPanel({
         </div>
       )}
 
-      <div style={{ marginTop: 8, display: 'flex', gap: 8 }}>
+      <div style={{ marginTop: 8, display: 'flex', gap: 8, alignItems: 'center' }}>
         <button disabled={!canSend} onClick={submit}>
           {sendLabel}
         </button>
+        {hasAgents && !multipleAgents && <span style={{ fontSize: 12, color: '#666' }}>via {agent}</span>}
         {running && (
           <button onClick={onCancel} title="Arrête l'agent ; le diff de ce qu'il a déjà écrit reste à valider">
             Arrêter

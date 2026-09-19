@@ -197,25 +197,19 @@ export default function App() {
   return (
     <div style={{ fontFamily: 'system-ui, sans-serif', padding: 16 }}>
       <h1 style={{ fontSize: 18, marginBottom: 4 }}>Vizion</h1>
+      {/* One line covers both the mode (Source/Overlay) and the connection state —
+          they used to be two separate lines saying the same thing twice. */}
       <p style={{ fontSize: 12, color: '#666', margin: 0 }}>
-        {isSourceMode && server.hello
-          ? `Mode Source · ${server.hello.cwd}`
-          : connected
-            ? 'Mode Overlay · page distante'
-            : 'Mode Overlay · aucun serveur local'}
+        {connected && server.hello
+          ? isSourceMode
+            ? `Mode Source · connecté à ${server.hello.cwd}`
+            : `Mode Overlay (page distante) · connecté à ${server.hello.cwd}`
+          : server.status === 'connecting'
+            ? 'Connexion au serveur...'
+            : settings.token === ''
+              ? "Serveur non démarré ou non appairé. Lance `npx vizion` dans ton projet, puis ouvre l'URL d'appairage qu'il affiche."
+              : 'Serveur non démarré. Lance `npx vizion` dans ton projet.'}
       </p>
-
-      {server.status === 'connecting' && <p>Connexion au serveur...</p>}
-      {server.status === 'connected' && <p>Connecté à {server.hello?.cwd}</p>}
-      {server.status === 'disconnected' &&
-        (settings.token === '' ? (
-          <p>
-            Serveur non démarré ou jeton manquant. Lance `npx vizion` dans ton projet et colle le jeton dans les
-            réglages.
-          </p>
-        ) : (
-          <p>Serveur non démarré. Lance `npx vizion` dans ton projet.</p>
-        ))}
 
       <PairingPrompt
         pending={pendingPairing}
@@ -265,7 +259,8 @@ export default function App() {
         />
       )}
 
-      <OverridePanel element={elements[0]} tabUrl={tabUrl} />
+      {/* Overlay overrides make no sense in Source mode: there, the agent edits the real files. */}
+      {!isSourceMode && <OverridePanel element={elements[0]} tabUrl={tabUrl} />}
 
       <RunPanel
         agents={server.hello?.agents ?? []}
