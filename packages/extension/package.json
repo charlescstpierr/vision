@@ -8,6 +8,7 @@
     "build": "wxt build -b chrome",
     "build:edge": "wxt build -b edge",
     "zip": "wxt zip -b chrome",
+    "zip:edge": "wxt zip -b edge",
     "postinstall": "wxt prepare",
     "test": "vitest run",
     "lint": "eslint entrypoints utils",

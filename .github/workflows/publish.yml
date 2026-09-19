@@ -5,8 +5,11 @@ on:
     tags:
       - 'v*'
 
+permissions:
+  contents: read
+
 jobs:
-  publish:
+  publish-npm:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -32,9 +35,55 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
-      - run: pnpm --filter @vizion/extension zip
+  github-release:
+    needs: publish-npm
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
 
-      - uses: actions/upload-artifact@v4
+      - uses: pnpm/action-setup@v4
         with:
-          name: vizion-extension
-          path: packages/extension/.output/*.zip
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # WXT takes `manifest.version` from this package.json, which is pinned to
+      # 0.0.0 because the package is private and never bumped. Without this the
+      # archive name would carry the tag while the extension the user installs
+      # still reports 0.0.0 -- so they could not tell versions apart, and the
+      # browser would not treat a newer build as an update.
+      - name: Set the extension version from the tag
+        id: version
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          if ! [[ "$version" =~ ^[0-9]+(\.[0-9]+){0,3}$ ]]; then
+            echo "::error::Tag $GITHUB_REF_NAME yields \"$version\", which is not a valid extension version (1 to 4 dot-separated integers)."
+            exit 1
+          fi
+          (cd packages/extension && npm pkg set version="$version")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - run: pnpm -r build
+
+      - run: pnpm --filter @vizion/extension zip
+      - run: pnpm --filter @vizion/extension zip:edge
+
+      - name: Package versioned extension archives
+        run: |
+          set -euo pipefail
+          version="${{ steps.version.outputs.version }}"
+          mkdir -p dist-extension
+          cp packages/extension/.output/*-chrome.zip "dist-extension/vizion-extension-chrome-${version}.zip"
+          cp packages/extension/.output/*-edge.zip "dist-extension/vizion-extension-edge-${version}.zip"
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist-extension/*.zip
