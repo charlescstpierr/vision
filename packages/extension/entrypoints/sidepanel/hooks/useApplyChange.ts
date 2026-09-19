@@ -1,6 +1,6 @@
 import type { ElementContext, Override } from '@vizion/shared';
-import { describeChanges, describeTextChange, type StyleChange } from '../../../utils/change-to-prompt.js';
-import { addOverride } from '../../../utils/override-store.js';
+import { describeChangesForElements, describeTextChange, type StyleChange } from '../../../utils/change-to-prompt.js';
+import { addOverride, addOverrides } from '../../../utils/override-store.js';
 
 function makeId(): string {
   return typeof crypto !== 'undefined' && 'randomUUID' in crypto
@@ -30,23 +30,29 @@ export function useApplyChange({ sourceMode, tabUrl, prompt, setPrompt, focusPro
     focusPrompt();
   };
 
-  const applyStyleChanges = (element: ElementContext, changes: StyleChange[]) => {
+  const applyStyleChanges = (elements: ElementContext[], changes: StyleChange[]) => {
+    if (elements.length === 0) return;
     if (sourceMode) {
-      appendToPrompt(describeChanges(element, changes));
+      appendToPrompt(describeChangesForElements(elements, changes));
       return;
     }
     if (!tabUrl) return;
-    for (const change of changes) {
-      const override: Override = {
-        id: makeId(),
-        selector: element.selector,
-        kind: 'style',
-        property: change.property,
-        value: change.value,
-        createdAt: Date.now(),
-      };
-      void addOverride(tabUrl, override);
+    // One click applying to (possibly) several elements is one undo step:
+    // build every override up front and persist them together.
+    const overrides: Override[] = [];
+    for (const element of elements) {
+      for (const change of changes) {
+        overrides.push({
+          id: makeId(),
+          selector: element.selector,
+          kind: 'style',
+          property: change.property,
+          value: change.value,
+          createdAt: Date.now(),
+        });
+      }
     }
+    void addOverrides(tabUrl, overrides);
   };
 
   const applyTextEdit = (selector: string, before: string, after: string) => {

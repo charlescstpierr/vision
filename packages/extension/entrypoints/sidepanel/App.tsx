@@ -25,7 +25,7 @@ export default function App() {
   const server = useVizionServer(settings);
   const tabUrl = useActiveTab();
   const [selectMode, setSelectMode] = useState(false);
-  const [element, setElement] = useState<ElementContext | undefined>(undefined);
+  const [elements, setElements] = useState<ElementContext[]>([]);
   const [notice, setNotice] = useState<string | undefined>(undefined);
   const [run, dispatch] = useReducer(runReducer, initialRunState);
   const [prompt, setPrompt] = useState('');
@@ -37,8 +37,19 @@ export default function App() {
   // the run/diff state is left alone since it belongs to the agent run, not
   // to whichever element happened to be selected.
   useEffect(() => {
-    setElement(undefined);
+    setElements([]);
   }, [tabUrl]);
+
+  // Fetch the agent run history as soon as the server says hello (on
+  // connect, and on every reconnect). `server.send` is a stable callback
+  // (see useVizionServer), so it's deliberately left out of the deps below:
+  // including the `server` handle itself would re-fire this on every
+  // render, since that handle is a fresh object each time.
+  useEffect(() => {
+    if (server.hello) {
+      server.send({ type: 'list-history' });
+    }
+  }, [server.hello]);
 
   const connected = server.status === 'connected';
   // Source mode requires both a live server connection and a local page:
@@ -57,8 +68,12 @@ export default function App() {
   useEffect(() => {
     const listener = (message: ContentToPanelMessage) => {
       if (message.type === 'vizion:element-selected') {
-        setElement(message.element);
-        setSelectMode(false);
+        setElements((prev) => {
+          if (!message.append) return [message.element];
+          if (prev.some((e) => e.selector === message.element.selector)) return prev;
+          return [...prev, message.element];
+        });
+        if (!message.append) setSelectMode(false);
       } else if (message.type === 'vizion:select-mode-changed') {
         setSelectMode(message.enabled);
       } else if (message.type === 'vizion:text-edited') {
@@ -83,17 +98,22 @@ export default function App() {
   };
 
   const runAgent = (agent: AgentKind, promptText: string) => {
-    if (!element) return;
+    if (elements.length === 0) return;
     dispatch({ type: 'start', agent, prompt: promptText });
-    server.send({ type: 'run', agent, prompt: promptText, element });
+    server.send({ type: 'run', agent, prompt: promptText, element: elements[0]!, elements });
   };
 
-  const editText = () => {
-    if (!element) return;
-    void sendToActiveTab({ type: 'vizion:edit-text', selector: element.selector }).catch(() => {
+  const editText = (selector: string) => {
+    void sendToActiveTab({ type: 'vizion:edit-text', selector }).catch(() => {
       setNotice('Recharge la page pour activer Vizion dessus.');
     });
   };
+
+  const removeElement = (selector: string) => {
+    setElements((prev) => prev.filter((e) => e.selector !== selector));
+  };
+
+  const clearElements = () => setElements([]);
 
   return (
     <div style={{ fontFamily: 'system-ui, sans-serif', padding: 16 }}>
@@ -126,29 +146,51 @@ export default function App() {
 
       {notice && <p style={{ color: '#a83232', fontSize: 12, marginTop: 8 }}>{notice}</p>}
 
-      {element && (
-        <ElementCard element={element} onClear={() => setElement(undefined)} onEditText={editText} />
+      {elements.length > 0 && (
+        <div style={{ marginTop: 12 }}>
+          {elements.length > 1 && (
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <strong style={{ fontSize: 13 }}>Éléments sélectionnés ({elements.length})</strong>
+              <button onClick={clearElements} style={{ fontSize: 12 }}>
+                Tout effacer
+              </button>
+            </div>
+          )}
+          {elements.map((el) => (
+            <ElementCard
+              key={el.selector}
+              element={el}
+              compact={elements.length > 1}
+              onClear={() => (elements.length > 1 ? removeElement(el.selector) : clearElements())}
+              onEditText={() => editText(el.selector)}
+            />
+          ))}
+        </div>
       )}
 
-      {element && (
+      {elements.length > 0 && (
         <QuickStyles
-          key={element.selector}
-          element={element}
-          onApply={(changes) => applyStyleChanges(element, changes)}
+          key={elements.map((e) => e.selector).join('|')}
+          element={elements[0]!}
+          onApply={(changes) => applyStyleChanges(elements, changes)}
         />
       )}
 
-      <OverridePanel element={element} tabUrl={tabUrl} />
+      <OverridePanel element={elements[0]} tabUrl={tabUrl} />
 
       <RunPanel
         agents={server.hello?.agents ?? []}
         connected={isSourceMode}
-        elementSelected={!!element}
+        elementSelected={elements.length > 0}
         running={run.running}
         prompt={prompt}
         setPrompt={setPrompt}
         promptRef={promptRef}
         onRun={runAgent}
+        runs={run.runs}
+        undoNotice={run.undoNotice}
+        error={run.error}
+        onUndoRun={(id) => server.send({ type: 'undo-run', id })}
       />
 
       <AgentOutput events={run.events} />

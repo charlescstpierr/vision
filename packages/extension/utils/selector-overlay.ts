@@ -64,7 +64,7 @@ export class SelectorOverlay {
     label.style.padding = '1px 4px';
     label.style.borderRadius = '2px';
     label.style.display = 'none';
-    label.style.whiteSpace = 'nowrap';
+    label.style.whiteSpace = 'pre-line';
 
     document.documentElement.appendChild(box);
     document.documentElement.appendChild(label);
@@ -90,7 +90,9 @@ export class SelectorOverlay {
     const tag = el.tagName.toLowerCase();
     const id = el.id ? `#${el.id}` : '';
     const firstClass = el.classList.length > 0 ? `.${el.classList[0]}` : '';
-    label.textContent = `${tag}${id}${firstClass}`;
+    // `highlight` only ever runs while select mode is on, so the multi-select
+    // hint always applies here.
+    label.textContent = `${tag}${id}${firstClass}\nMaj+clic pour ajouter`;
     label.style.display = 'block';
     const labelTop = rect.top > 16 ? rect.top - 18 : rect.bottom + 2;
     label.style.top = `${labelTop}px`;
@@ -118,13 +120,19 @@ export class SelectorOverlay {
     event.preventDefault();
     event.stopPropagation();
 
+    // Shift+click adds to the current selection and stays in select mode so
+    // more elements can be picked; a plain click replaces the selection and
+    // exits, as before.
+    const append = event.shiftKey;
     const context = extractElementContext(target, window.location.href);
-    const message: ContentToPanelMessage = { type: 'vizion:element-selected', element: context };
+    const message: ContentToPanelMessage = { type: 'vizion:element-selected', element: context, append };
     chrome.runtime.sendMessage(message).catch(() => {
       /* panel may be closed; ignore */
     });
 
-    this.setEnabled(false);
+    if (!append) {
+      this.setEnabled(false);
+    }
   };
 
   private handleKeyDown = (event: KeyboardEvent): void => {

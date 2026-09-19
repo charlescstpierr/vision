@@ -72,4 +72,44 @@ describe('buildPrompt', () => {
     expect(prompt).toContain('(truncated)');
     expect(prompt.length).toBeLessThan(longHtml.length + 500);
   });
+
+  it('describes multiple elements as a numbered list and phrases the task for all of them', () => {
+    const req = makeRequest();
+    const second: ElementContext = {
+      selector: '.card__title',
+      tagName: 'h2',
+      classes: ['card__title'],
+      textContent: 'Title',
+      outerHtml: '<h2 class="card__title">Title</h2>',
+      domPath: ['html', 'body', '.card', 'h2.card__title'],
+      rect: { x: 0, y: 0, width: 50, height: 20 },
+      computedStyles: {},
+      pageUrl: 'https://example.com/app',
+    };
+    const prompt = buildPrompt({ ...req, elements: [req.element, second] }, '/tmp/proj');
+
+    expect(prompt).toContain('Selected elements (2):');
+    expect(prompt).toContain('1. Selector: #app > button.primary.');
+    expect(prompt).toContain('2. Selector: .card__title.');
+    expect(prompt).toContain('Title');
+    expect(prompt).toContain('Apply the requested change to all of the elements listed above');
+    expect(prompt).not.toContain('Selected element:');
+  });
+
+  it('truncates each element outerHtml at 800 chars in the multi-element format', () => {
+    const req = makeRequest();
+    const longHtml = `<div>${'y'.repeat(3000)}</div>`;
+    const second: ElementContext = { ...req.element, selector: '.other', outerHtml: longHtml };
+    const prompt = buildPrompt({ ...req, elements: [req.element, second] }, '/tmp/proj');
+
+    expect(prompt).not.toContain(longHtml);
+    expect(prompt).toContain('(truncated)');
+  });
+
+  it('keeps the single-element format when elements has exactly one entry', () => {
+    const req = makeRequest();
+    const single = buildPrompt({ ...req, elements: [req.element] }, '/tmp/proj');
+    const noElements = buildPrompt(req, '/tmp/proj');
+    expect(single).toBe(noElements);
+  });
 });

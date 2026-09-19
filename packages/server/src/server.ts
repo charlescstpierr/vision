@@ -1,3 +1,4 @@
+import { execFile } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import { createRequire } from 'node:module';
@@ -5,10 +6,14 @@ import http, { type IncomingMessage, type ServerResponse } from 'node:http';
 import type { Socket } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
+import { promisify } from 'node:util';
 import { WebSocketServer, type WebSocket } from 'ws';
-import type { AgentKind, AgentRunner, ClientMessage, ServerMessage } from '@vizion/shared';
+import type { AgentKind, AgentRunner, ClientMessage, FileDiff, ServerMessage } from '@vizion/shared';
+import { RunHistory } from './history.js';
 import { createRunners, detectAvailableAgents } from './runners/index.js';
-import { computeDiff, restoreSnapshot, takeSnapshot, type Snapshot } from './snapshot.js';
+import { buildUndoFiles, computeDiff, restoreSnapshot, takeSnapshot, type Snapshot } from './snapshot.js';
+
+const execFileAsync = promisify(execFile);
 
 const require = createRequire(import.meta.url);
 const pkg = require('../package.json') as { name: string; version: string };
@@ -60,6 +65,44 @@ function timingSafeEqualString(a: string, b: string): boolean {
   const bufB = Buffer.from(b);
   if (bufA.length !== bufB.length) return false;
   return crypto.timingSafeEqual(bufA, bufB);
+}
+
+/**
+ * Tracks the server-wide "only one project operation at a time" reservation
+ * that `run` and `undo-run` share (accept/reject also check it, since they
+ * touch the working tree while an undo is writing to it). Kept as a small,
+ * pure state machine, separate from `activeRun`'s abort-controller bookkeeping,
+ * so the acquire/release contract can be unit tested without a real server.
+ */
+export type OpKind = 'run' | 'undo';
+
+export class OpLock {
+  private current: OpKind | null = null;
+
+  get active(): OpKind | null {
+    return this.current;
+  }
+
+  /** Reserves `kind` if nothing else is active. Returns whether it succeeded. */
+  acquire(kind: OpKind): boolean {
+    if (this.current) return false;
+    this.current = kind;
+    return true;
+  }
+
+  /** No-op if `kind` isn't the currently held operation. */
+  release(kind: OpKind): void {
+    if (this.current === kind) this.current = null;
+  }
+}
+
+async function readFileIfExists(abs: string): Promise<Buffer | null> {
+  try {
+    return await fs.readFile(abs);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw err;
+  }
 }
 
 function isAllowedOrigin(origin: string | undefined, prefixes: string[]): boolean {
@@ -121,12 +164,33 @@ export function createServer(options: CreateServerOptions): VizionServer {
   // the socket that owns it aborts the agent process.
   let activeRun: { ws: WebSocket; controller: AbortController } | null = null;
 
+  // Cross-kind counterpart to `activeRun`: held while a `run` OR an
+  // `undo-run` is in flight, so the other kind (and `accept`/`reject`) can
+  // refuse instead of racing it.
+  const opLock = new OpLock();
+
+  // Accepted runs, kept so their diff can be undone later. Server-wide, like
+  // `activeRun`: the history is about the shared project, not a connection.
+  const history = new RunHistory();
+
   // The snapshot from the most recently *finished* run on a connection
   // (diff already sent), plus the paths it touched (what `reject` should
-  // restore). Set only once the diff has been sent, so its presence means
-  // "awaiting accept/reject", not "a run is in progress". Cleared on
-  // `accept`, `reject`, or socket close.
-  const pendingSnapshots = new Map<WebSocket, { snapshot: Snapshot; touchedPaths: string[] }>();
+  // restore), the diff itself (what `accept` stores into history) and the
+  // run's own metadata (agent/prompt/selectors, for the RunRecord). Set only
+  // once the diff has been sent, so its presence means "awaiting
+  // accept/reject", not "a run is in progress". Cleared on `accept`,
+  // `reject`, or socket close.
+  const pendingSnapshots = new Map<
+    WebSocket,
+    {
+      snapshot: Snapshot;
+      touchedPaths: string[];
+      files: FileDiff[];
+      agent: AgentKind;
+      prompt: string;
+      selectors: string[];
+    }
+  >();
 
   httpServer.on('upgrade', (req: IncomingMessage, socket: Socket, head: Buffer) => {
     const url = new URL(req.url ?? '', 'http://localhost');
@@ -146,12 +210,26 @@ export function createServer(options: CreateServerOptions): VizionServer {
     });
   });
 
+  /** Sends `message` to every currently open connection. */
+  function broadcast(message: ServerMessage): void {
+    for (const client of wss.clients) {
+      send(client, message);
+    }
+  }
+
   async function handleRun(
     ws: WebSocket,
     message: Extract<ClientMessage, { type: 'run' }>,
   ): Promise<void> {
-    if (pendingSnapshots.has(ws)) {
+    // Project-wide, not just this socket: acceptance order must equal
+    // execution order, so a run is refused while ANY connection has an
+    // undecided diff.
+    if (pendingSnapshots.size > 0) {
       send(ws, { type: 'error', message: "Accepte ou rejette d'abord les modifications en attente." });
+      return;
+    }
+    if (opLock.active === 'undo') {
+      send(ws, { type: 'error', message: 'Une opération est déjà en cours.' });
       return;
     }
     if (activeRun) {
@@ -164,6 +242,7 @@ export function createServer(options: CreateServerOptions): VizionServer {
     // instead of racing it.
     const controller = new AbortController();
     activeRun = { ws, controller };
+    opLock.acquire('run');
 
     try {
       const runner = runners.find((candidate) => candidate.kind === message.agent);
@@ -176,6 +255,9 @@ export function createServer(options: CreateServerOptions): VizionServer {
         agent: message.agent,
         prompt: message.prompt,
         element: message.element,
+        // Carried through (untyped on `RunRequest` itself) so `buildPrompt`
+        // can describe every selected element when there is more than one.
+        elements: message.elements,
         pageUrl: message.element.pageUrl,
         cwd,
       };
@@ -190,7 +272,15 @@ export function createServer(options: CreateServerOptions): VizionServer {
         // Diff after the run finishes, whether it completed, errored, or was aborted.
         try {
           const files = await computeDiff(snapshot);
-          pendingSnapshots.set(ws, { snapshot, touchedPaths: files.map((file) => file.path) });
+          const selectors = (message.elements ?? [message.element]).map((el) => el.selector);
+          pendingSnapshots.set(ws, {
+            snapshot,
+            touchedPaths: files.map((file) => file.path),
+            files,
+            agent: message.agent,
+            prompt: message.prompt,
+            selectors,
+          });
           send(ws, { type: 'diff', files });
         } catch (diffErr) {
           send(ws, {
@@ -202,7 +292,96 @@ export function createServer(options: CreateServerOptions): VizionServer {
     } catch (err) {
       send(ws, { type: 'error', message: err instanceof Error ? err.message : "l'exécution de l'agent a échoué" });
     } finally {
-      if (activeRun?.ws === ws) activeRun = null;
+      if (activeRun?.ws === ws) {
+        activeRun = null;
+        opLock.release('run');
+      }
+    }
+  }
+
+  /**
+   * Restores the byte-exact pre-run content (and POSIX mode) of every file
+   * an accepted run touched, using the before/after snapshot captured at
+   * `accept` time. Refuses without changing anything if any touched file no
+   * longer matches what the run left behind (edited or recreated since).
+   * Only the most recent still-accepted run may be undone, since an older
+   * run's "after" state can no longer be trusted once a newer run has
+   * touched the same files.
+   */
+  async function handleUndoRun(ws: WebSocket, id: string): Promise<void> {
+    if (opLock.active === 'undo') {
+      send(ws, { type: 'error', message: 'Une opération est déjà en cours.' });
+      return;
+    }
+    if (activeRun || pendingSnapshots.size > 0) {
+      send(ws, { type: 'error', message: "Termine le run en cours d'abord." });
+      return;
+    }
+    const entry = history.get(id);
+    if (!entry) {
+      send(ws, { type: 'error', message: 'Run introuvable.' });
+      return;
+    }
+    if (entry.record.status === 'undone') {
+      send(ws, { type: 'error', message: 'Ce run a déjà été annulé.' });
+      return;
+    }
+    const mostRecentAccepted = history.list().find((run) => run.status === 'accepted');
+    if (mostRecentAccepted?.id !== id) {
+      send(ws, { type: 'error', message: "Annule d'abord les runs plus récents." });
+      return;
+    }
+
+    // Reserve synchronously (before the first `await`) so a second
+    // `undo-run` processed while this one is still resolving is rejected
+    // instead of racing it.
+    opLock.acquire('undo');
+    try {
+      const { stdout } = await execFileAsync('git', ['rev-parse', '--show-toplevel'], { cwd });
+      const root = stdout.trim();
+
+      // Verify every touched file still matches what the run left behind
+      // before writing anything back.
+      for (const file of entry.files) {
+        const abs = path.join(root, file.path);
+        const current = await readFileIfExists(abs);
+        const matches =
+          file.after === null ? current === null : current !== null && current.equals(file.after.content);
+        if (!matches) {
+          send(ws, {
+            type: 'error',
+            message: `Conflit : ${file.path} a été modifié depuis ce run. Annulation impossible.`,
+          });
+          return;
+        }
+      }
+
+      for (const file of entry.files) {
+        const abs = path.join(root, file.path);
+        if (file.before === null) {
+          await fs.rm(abs, { force: true });
+        } else {
+          await fs.mkdir(path.dirname(abs), { recursive: true });
+          await fs.writeFile(abs, file.before.content);
+          if (process.platform !== 'win32') await fs.chmod(abs, file.before.mode);
+        }
+      }
+
+      history.markUndone(id);
+      send(ws, { type: 'run-undone', id, files: entry.record.files });
+      broadcast({ type: 'history', runs: history.list() });
+    } catch (err) {
+      const execErr = err as { stderr?: string; message?: string };
+      const firstLine = execErr.stderr
+        ?.split('\n')
+        .map((line) => line.trim())
+        .find((line) => line.length > 0);
+      send(ws, {
+        type: 'error',
+        message: `Échec de l'annulation du run : ${firstLine ?? execErr.message ?? 'erreur inconnue'}`,
+      });
+    } finally {
+      opLock.release('undo');
     }
   }
 
@@ -213,14 +392,37 @@ export function createServer(options: CreateServerOptions): VizionServer {
           send(ws, { type: 'pong' });
           return;
         case 'accept': {
-          if (!pendingSnapshots.delete(ws)) {
+          if (opLock.active === 'undo') {
+            send(ws, { type: 'error', message: 'Une opération est déjà en cours.' });
+            return;
+          }
+          const pending = pendingSnapshots.get(ws);
+          if (!pending) {
             send(ws, { type: 'error', message: 'rien à accepter ou rejeter' });
             return;
           }
+          pendingSnapshots.delete(ws);
+          const undoFiles = await buildUndoFiles(pending.snapshot, pending.touchedPaths);
+          history.add(
+            {
+              agent: pending.agent,
+              prompt: pending.prompt,
+              selectors: pending.selectors,
+              createdAt: Date.now(),
+              files: pending.files.map((file) => file.path),
+              status: 'accepted',
+            },
+            undoFiles,
+          );
           send(ws, { type: 'diff', files: [] });
+          broadcast({ type: 'history', runs: history.list() });
           return;
         }
         case 'reject': {
+          if (opLock.active === 'undo') {
+            send(ws, { type: 'error', message: 'Une opération est déjà en cours.' });
+            return;
+          }
           const pending = pendingSnapshots.get(ws);
           if (!pending) {
             send(ws, { type: 'error', message: 'rien à accepter ou rejeter' });
@@ -236,10 +438,17 @@ export function createServer(options: CreateServerOptions): VizionServer {
             });
           }
           send(ws, { type: 'diff', files: [] });
+          broadcast({ type: 'history', runs: history.list() });
           return;
         }
         case 'run':
           await handleRun(ws, message);
+          return;
+        case 'undo-run':
+          await handleUndoRun(ws, message.id);
+          return;
+        case 'list-history':
+          send(ws, { type: 'history', runs: history.list() });
           return;
         default:
           send(ws, { type: 'error', message: 'type de message inconnu' });
@@ -251,6 +460,7 @@ export function createServer(options: CreateServerOptions): VizionServer {
 
   wss.on('connection', (ws: WebSocket) => {
     send(ws, { type: 'hello', version: pkg.version, cwd, agents: detectedAgents });
+    send(ws, { type: 'history', runs: history.list() });
 
     ws.on('message', (data: Buffer) => {
       let message: ClientMessage;
@@ -267,6 +477,7 @@ export function createServer(options: CreateServerOptions): VizionServer {
       if (activeRun?.ws === ws) {
         activeRun.controller.abort();
         activeRun = null;
+        opLock.release('run');
       }
       pendingSnapshots.delete(ws);
     });

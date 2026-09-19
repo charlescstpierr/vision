@@ -34,10 +34,31 @@ export interface FileDiff {
   patch: string;
 }
 
+/** A past agent run whose diff was accepted, kept so it can be undone later. */
+export interface RunRecord {
+  id: string;
+  agent: AgentKind;
+  prompt: string;
+  /** Selectors of the elements the run was about (one or more). */
+  selectors: string[];
+  createdAt: number;
+  files: string[];
+  status: 'accepted' | 'undone';
+}
+
 export type ClientMessage =
-  | { type: 'run'; agent: AgentKind; prompt: string; element: ElementContext }
+  | {
+      type: 'run';
+      agent: AgentKind;
+      prompt: string;
+      /** Primary element (kept for compatibility); `elements` lists all selected ones. */
+      element: ElementContext;
+      elements?: ElementContext[];
+    }
   | { type: 'accept' }
   | { type: 'reject' }
+  | { type: 'undo-run'; id: string }
+  | { type: 'list-history' }
   | { type: 'ping' };
 
 export type ServerMessage =
@@ -45,5 +66,7 @@ export type ServerMessage =
   | { type: 'event'; event: AgentEvent }
   | { type: 'diff'; files: FileDiff[] }
   | { type: 'restored'; files: string[] }
+  | { type: 'history'; runs: RunRecord[] }
+  | { type: 'run-undone'; id: string; files: string[] }
   | { type: 'pong' }
   | { type: 'error'; message: string };

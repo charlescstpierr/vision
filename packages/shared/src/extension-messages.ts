@@ -6,6 +6,6 @@ export type PanelToContentMessage =
   | { type: 'vizion:edit-text'; selector: string };
 
 export type ContentToPanelMessage =
-  | { type: 'vizion:element-selected'; element: ElementContext }
+  | { type: 'vizion:element-selected'; element: ElementContext; append?: boolean }
   | { type: 'vizion:select-mode-changed'; enabled: boolean }
   | { type: 'vizion:text-edited'; selector: string; before: string; after: string; committed: boolean };
