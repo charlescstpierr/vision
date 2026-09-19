@@ -116,10 +116,10 @@ export default function OverridePanel({ element, tabUrl }: Props) {
 
   return (
     <div style={{ marginTop: 12, border: '1px solid #ddd', borderRadius: 8, padding: 10 }}>
-      <strong style={{ fontSize: 13 }}>Overlay overrides</strong>
+      <strong style={{ fontSize: 13 }}>Overrides du mode Overlay</strong>
 
       {!tabUrl && (
-        <p style={{ fontSize: 12, color: '#666', marginTop: 8 }}>No active tab.</p>
+        <p style={{ fontSize: 12, color: '#666', marginTop: 8 }}>Aucun onglet actif.</p>
       )}
 
       {element ? (
@@ -141,20 +141,20 @@ export default function OverridePanel({ element, tabUrl }: Props) {
                 </select>
                 <input
                   style={{ ...fieldStyle, marginTop: 0, flex: '1 1 auto' }}
-                  placeholder="value"
+                  placeholder="valeur"
                   value={value}
                   onChange={(e) => setValue(e.target.value)}
                 />
               </div>
             </label>
             <button style={{ marginTop: 6 }} disabled={!tabUrl || value.trim().length === 0} onClick={applyStyle}>
-              Apply style
+              Appliquer le style
             </button>
           </div>
 
           <div style={rowStyle}>
             <label style={{ fontSize: 12, color: '#444', display: 'block' }}>
-              Text
+              Texte
               <textarea
                 style={{ ...fieldStyle, minHeight: 48, resize: 'vertical' }}
                 value={text}
@@ -162,19 +162,19 @@ export default function OverridePanel({ element, tabUrl }: Props) {
               />
             </label>
             <button style={{ marginTop: 6 }} disabled={!tabUrl} onClick={applyText}>
-              Apply text
+              Appliquer le texte
             </button>
           </div>
         </>
       ) : (
-        <p style={{ fontSize: 12, color: '#666', marginTop: 8 }}>Select an element to add an override.</p>
+        <p style={{ fontSize: 12, color: '#666', marginTop: 8 }}>Sélectionne un élément pour ajouter un override.</p>
       )}
 
       <div style={{ marginTop: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <strong style={{ fontSize: 12 }}>Overrides on this page ({overrides.length})</strong>
+        <strong style={{ fontSize: 12 }}>Overrides sur cette page ({overrides.length})</strong>
         {overrides.length > 0 && (
           <button style={{ fontSize: 12 }} onClick={clearAll}>
-            Clear all
+            Tout effacer
           </button>
         )}
       </div>
@@ -195,7 +195,7 @@ export default function OverridePanel({ element, tabUrl }: Props) {
             [{o.kind}] {truncate(o.selector, 30)} {o.kind === 'style' ? `${o.property}: ${o.value}` : `"${truncate(o.value, 24)}"`}
           </span>
           <button style={{ flex: '0 0 auto' }} onClick={() => remove(o.id)}>
-            Remove
+            Retirer
           </button>
         </div>
       ))}

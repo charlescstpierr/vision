@@ -29,10 +29,12 @@ const preStyle: CSSProperties = {
 export default function DiffView({ files, error, restoredFiles, onAccept, onReject }: Props) {
   return (
     <div style={{ marginTop: 12, border: '1px solid #ddd', borderRadius: 8, padding: 10 }}>
-      <strong style={{ fontSize: 13 }}>Changes ({files.length} files)</strong>
+      <strong style={{ fontSize: 13 }}>
+        Modifications ({files.length} fichier{files.length === 1 ? '' : 's'})
+      </strong>
 
       {files.length === 0 && (
-        <p style={{ fontSize: 12, color: '#666', marginTop: 8 }}>The agent made no file changes.</p>
+        <p style={{ fontSize: 12, color: '#666', marginTop: 8 }}>L'agent n'a modifié aucun fichier.</p>
       )}
 
       {files.map((file) => {
@@ -67,13 +69,14 @@ export default function DiffView({ files, error, restoredFiles, onAccept, onReje
       })}
 
       <div style={{ marginTop: 10, display: 'flex', gap: 8 }}>
-        <button onClick={onAccept}>Accept</button>
-        <button onClick={onReject}>Reject</button>
+        <button onClick={onAccept}>Accepter</button>
+        <button onClick={onReject}>Rejeter</button>
       </div>
 
       {restoredFiles && (
         <p style={{ fontSize: 12, color: '#1f6b2c', marginTop: 8 }}>
-          Restored {restoredFiles.length} file{restoredFiles.length === 1 ? '' : 's'}.
+          {restoredFiles.length} fichier{restoredFiles.length === 1 ? '' : 's'} restauré
+          {restoredFiles.length === 1 ? '' : 's'}.
         </p>
       )}
 

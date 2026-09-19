@@ -150,7 +150,7 @@ describe('server websocket', () => {
       }
       const errorMessages = results.filter((m) => m.type === 'error');
       expect(errorMessages).toEqual([
-        { type: 'error', message: 'a run is already active on this connection' },
+        { type: 'error', message: 'une exécution est déjà en cours sur cette connexion' },
       ]);
 
       ws.close();
@@ -248,7 +248,7 @@ describe('server diff / accept / reject', () => {
 
       ws.send(JSON.stringify({ type: 'reject' }));
       const secondReject = await reader.next();
-      expect(secondReject).toEqual({ type: 'error', message: 'nothing to accept/reject' });
+      expect(secondReject).toEqual({ type: 'error', message: 'rien à accepter ou rejeter' });
 
       ws.close();
     } finally {

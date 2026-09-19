@@ -48,7 +48,7 @@ function Row(props: { label: string; children: React.ReactNode; onApply: () => v
       <span style={labelStyle}>{props.label}</span>
       {props.children}
       <button style={{ flex: '0 0 auto' }} onClick={props.onApply}>
-        Apply
+        Appliquer
       </button>
     </div>
   );
@@ -79,10 +79,10 @@ export default function QuickStyles({ element, onApply }: Props) {
 
   return (
     <div style={{ marginTop: 12 }}>
-      <strong style={{ fontSize: 13 }}>Quick styles</strong>
+      <strong style={{ fontSize: 13 }}>Styles rapides</strong>
 
       <Row
-        label="Color"
+        label="Couleur"
         onApply={() => applyIfChanged('color', color, computed.color ?? '')}
       >
         <input
@@ -95,7 +95,7 @@ export default function QuickStyles({ element, onApply }: Props) {
       </Row>
 
       <Row
-        label="Background"
+        label="Arrière-plan"
         onApply={() => applyIfChanged('background-color', background, computed['background-color'] ?? '')}
       >
         <input
@@ -108,7 +108,7 @@ export default function QuickStyles({ element, onApply }: Props) {
       </Row>
 
       <Row
-        label="Font size"
+        label="Taille de police"
         onApply={() => applyIfChanged('font-size', `${fontSize}px`, computed['font-size'] ?? '')}
       >
         <input
@@ -121,7 +121,7 @@ export default function QuickStyles({ element, onApply }: Props) {
       </Row>
 
       <Row
-        label="Font weight"
+        label="Graisse"
         onApply={() => applyIfChanged('font-weight', fontWeight, computed['font-weight'] ?? '')}
       >
         <select style={fieldStyle} value={fontWeight} onChange={(e) => setFontWeight(e.target.value)}>
@@ -134,21 +134,21 @@ export default function QuickStyles({ element, onApply }: Props) {
       </Row>
 
       <Row
-        label="Padding"
+        label="Espacement interne"
         onApply={() => applyIfChanged('padding', padding, computed.padding ?? '')}
       >
         <input style={fieldStyle} value={padding} onChange={(e) => setPadding(e.target.value)} />
       </Row>
 
       <Row
-        label="Margin"
+        label="Marge"
         onApply={() => applyIfChanged('margin', margin, computed.margin ?? '')}
       >
         <input style={fieldStyle} value={margin} onChange={(e) => setMargin(e.target.value)} />
       </Row>
 
       <Row
-        label="Radius"
+        label="Rayon"
         onApply={() => applyIfChanged('border-radius', `${borderRadius}px`, computed['border-radius'] ?? '')}
       >
         <input
@@ -161,7 +161,7 @@ export default function QuickStyles({ element, onApply }: Props) {
       </Row>
 
       <Row
-        label="Text align"
+        label="Alignement du texte"
         onApply={() => applyIfChanged('text-align', textAlign, computed['text-align'] ?? '')}
       >
         <select style={fieldStyle} value={textAlign} onChange={(e) => setTextAlign(e.target.value)}>

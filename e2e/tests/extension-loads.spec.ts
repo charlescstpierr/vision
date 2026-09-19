@@ -7,5 +7,5 @@ test('extension loads', async ({ context, extensionId }) => {
   await panel.goto(`chrome-extension://${extensionId}/sidepanel.html`);
 
   await expect(panel.locator('h1')).toHaveText('Vizion');
-  await expect(panel.getByText('Server not running', { exact: false })).toBeVisible();
+  await expect(panel.getByText('Serveur non démarré', { exact: false })).toBeVisible();
 });

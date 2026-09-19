@@ -63,7 +63,7 @@ export default function App() {
       await sendToActiveTab({ type: 'vizion:set-select-mode', enabled: next });
       setSelectMode(next);
     } catch {
-      setNotice('Reload the page to enable Vizion on it.');
+      setNotice('Recharge la page pour activer Vizion dessus.');
     }
   };
 
@@ -76,7 +76,7 @@ export default function App() {
   const editText = () => {
     if (!element) return;
     void sendToActiveTab({ type: 'vizion:edit-text', selector: element.selector }).catch(() => {
-      setNotice('Reload the page to enable Vizion on it.');
+      setNotice('Recharge la page pour activer Vizion dessus.');
     });
   };
 
@@ -84,15 +84,15 @@ export default function App() {
     <div style={{ fontFamily: 'system-ui, sans-serif', padding: 16 }}>
       <h1 style={{ fontSize: 18, marginBottom: 4 }}>Vizion</h1>
       <p style={{ fontSize: 12, color: '#666', margin: 0 }}>
-        {connected && server.hello ? `Source mode · ${server.hello.cwd}` : 'Overlay mode · no local server'}
+        {connected && server.hello ? `Mode Source · ${server.hello.cwd}` : 'Mode Overlay · aucun serveur local'}
       </p>
 
-      {server.status === 'connecting' && <p>Connecting to server...</p>}
-      {server.status === 'connected' && <p>Connected to {server.hello?.cwd}</p>}
-      {server.status === 'disconnected' && <p>Server not running. Run `npx vizion` in your project.</p>}
+      {server.status === 'connecting' && <p>Connexion au serveur...</p>}
+      {server.status === 'connected' && <p>Connecté à {server.hello?.cwd}</p>}
+      {server.status === 'disconnected' && <p>Serveur non démarré. Lance `npx vizion` dans ton projet.</p>}
 
       <button onClick={toggleSelectMode} style={{ marginTop: 8 }}>
-        {selectMode ? 'Cancel (Esc)' : 'Select element'}
+        {selectMode ? 'Annuler (Échap)' : 'Sélectionner un élément'}
       </button>
 
       {notice && <p style={{ color: '#a83232', fontSize: 12, marginTop: 8 }}>{notice}</p>}

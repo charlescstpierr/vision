@@ -28,7 +28,7 @@ export default function AgentOutput({ events }: Props) {
     >
       {events.map((event, i) => (
         <div key={i} style={{ marginBottom: 6 }}>
-          {event.type === 'started' && <p style={{ color: '#666', margin: 0 }}>Agent started</p>}
+          {event.type === 'started' && <p style={{ color: '#666', margin: 0 }}>Agent démarré</p>}
           {event.type === 'text' &&
             event.text.split('\n').map((line, j) => (
               <p key={j} style={{ margin: '2px 0' }}>
@@ -49,7 +49,7 @@ export default function AgentOutput({ events }: Props) {
             </p>
           )}
           {event.type === 'done' && (
-            <p style={{ margin: '2px 0', color: '#2f7a3d' }}>Done (exit {event.exitCode})</p>
+            <p style={{ margin: '2px 0', color: '#2f7a3d' }}>Terminé (code {event.exitCode})</p>
           )}
           {event.type === 'error' && (
             <p style={{ margin: '2px 0', color: '#a83232' }}>{event.message}</p>

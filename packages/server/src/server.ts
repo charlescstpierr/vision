@@ -97,7 +97,7 @@ export function createServer(options: CreateServerOptions): VizionServer {
     message: Extract<ClientMessage, { type: 'run' }>,
   ): Promise<void> {
     if (activeRuns.has(ws)) {
-      send(ws, { type: 'error', message: 'a run is already active on this connection' });
+      send(ws, { type: 'error', message: 'une exécution est déjà en cours sur cette connexion' });
       return;
     }
 
@@ -110,7 +110,7 @@ export function createServer(options: CreateServerOptions): VizionServer {
     try {
       const runner = runners.find((candidate) => candidate.kind === message.agent);
       if (!runner || !(await runner.isAvailable())) {
-        send(ws, { type: 'error', message: `agent "${message.agent}" is not available` });
+        send(ws, { type: 'error', message: `agent non disponible : ${message.agent}` });
         return;
       }
 
@@ -139,12 +139,12 @@ export function createServer(options: CreateServerOptions): VizionServer {
         } catch (diffErr) {
           send(ws, {
             type: 'error',
-            message: diffErr instanceof Error ? diffErr.message : 'failed to compute diff',
+            message: diffErr instanceof Error ? diffErr.message : 'échec du calcul du diff',
           });
         }
       }
     } catch (err) {
-      send(ws, { type: 'error', message: err instanceof Error ? err.message : 'agent run failed' });
+      send(ws, { type: 'error', message: err instanceof Error ? err.message : "l'exécution de l'agent a échoué" });
     } finally {
       activeRuns.delete(ws);
     }
@@ -158,7 +158,7 @@ export function createServer(options: CreateServerOptions): VizionServer {
           return;
         case 'accept': {
           if (!pendingSnapshots.delete(ws)) {
-            send(ws, { type: 'error', message: 'nothing to accept/reject' });
+            send(ws, { type: 'error', message: 'rien à accepter ou rejeter' });
             return;
           }
           send(ws, { type: 'diff', files: [] });
@@ -167,7 +167,7 @@ export function createServer(options: CreateServerOptions): VizionServer {
         case 'reject': {
           const pending = pendingSnapshots.get(ws);
           if (!pending) {
-            send(ws, { type: 'error', message: 'nothing to accept/reject' });
+            send(ws, { type: 'error', message: 'rien à accepter ou rejeter' });
             return;
           }
           pendingSnapshots.delete(ws);
@@ -180,10 +180,10 @@ export function createServer(options: CreateServerOptions): VizionServer {
           await handleRun(ws, message);
           return;
         default:
-          send(ws, { type: 'error', message: 'unknown message type' });
+          send(ws, { type: 'error', message: 'type de message inconnu' });
       }
     } catch (err) {
-      send(ws, { type: 'error', message: err instanceof Error ? err.message : 'internal error' });
+      send(ws, { type: 'error', message: err instanceof Error ? err.message : 'erreur interne' });
     }
   }
 
@@ -195,7 +195,7 @@ export function createServer(options: CreateServerOptions): VizionServer {
       try {
         message = JSON.parse(data.toString('utf8')) as ClientMessage;
       } catch {
-        send(ws, { type: 'error', message: 'invalid JSON' });
+        send(ws, { type: 'error', message: 'message JSON invalide' });
         return;
       }
       void handleClientMessage(ws, message);

@@ -6,16 +6,16 @@ import { createServer } from './server.js';
 const require = createRequire(import.meta.url);
 const pkg = require('../package.json') as { name: string; version: string };
 
-const USAGE = `Usage: vizion [options]
+const USAGE = `Usage : vizion [options]
 
-Run the Vizion local server in your project folder so the Vizion browser
-extension can pair with a coding agent (Claude or Codex) to edit this
-project's live pages.
+Démarre le serveur local Vizion dans le dossier de ton projet pour que
+l'extension de navigateur Vizion puisse se jumeler à un agent de code
+(Claude ou Codex) et modifier les pages en direct de ce projet.
 
-Options:
-  --port <number>  Port to listen on (default: ${DEFAULT_PORT})
-  -h, --help       Print this help message
-  --version        Print the installed version
+Options :
+  --port <number>  Port d'écoute (par défaut : ${DEFAULT_PORT})
+  -h, --help       Affiche ce message d'aide
+  --version        Affiche la version installée
 `;
 
 function parsePort(argv: string[]): number {
@@ -44,11 +44,11 @@ async function main(): Promise<void> {
   const cwd = process.cwd();
   const server = createServer({ port, cwd });
   await server.start();
-  console.log(`Vizion server listening on http://127.0.0.1:${server.port} (project: ${cwd})`);
+  console.log(`Serveur Vizion à l'écoute sur http://127.0.0.1:${server.port} (projet : ${cwd})`);
   console.log(
     server.agents.length > 0
-      ? `Detected agents: ${server.agents.join(', ')}`
-      : 'No agents detected: install codex or claude',
+      ? `Agents détectés : ${server.agents.join(', ')}`
+      : 'Aucun agent détecté : installe codex ou claude',
   );
 }
 

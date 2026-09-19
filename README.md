@@ -1,32 +1,32 @@
 # Vizion
 
-Edit live websites from Microsoft Edge or Chrome with a coding agent: run the local server, select an element, describe the change, and accept or reject the diff.
+Modifie des sites web en direct depuis Microsoft Edge ou Chrome avec un agent de code : démarre le serveur local, sélectionne un élément, décris le changement, puis accepte ou rejette le diff.
 
-## How it works
+## Comment ça marche
 
-1. Run the local Vizion server in your project folder (skip this for overlay mode).
-2. Open the page in Edge or Chrome (from your dev server or any site).
-3. Click the toolbar icon to open the Vizion side panel.
-4. Click "Select element", then click the element you want to change.
-5. Describe the change in the prompt, pick an agent, and send. Stream the output, review the diff, accept or reject.
+1. Démarre le serveur local Vizion dans le dossier de ton projet (ignore cette étape pour le mode Overlay).
+2. Ouvre la page dans Edge ou Chrome (depuis ton serveur de dev ou n'importe quel site).
+3. Clique sur l'icône de la barre d'outils pour ouvrir le panneau latéral Vizion.
+4. Clique sur « Sélectionner un élément », puis clique sur l'élément à modifier.
+5. Décris le changement dans l'invite, choisis un agent, et envoie. Le résultat s'affiche en direct, révise le diff, puis accepte ou rejette.
 
-**Two modes:**
+**Deux modes :**
 
-- **Source mode**: Server running, page from your dev server (localhost). The agent edits your project files, finding the right source file by context.
-- **Overlay mode**: No server, or any site you do not have the source of. Your quick edits (text, styles) are saved as overrides in the extension, per page URL, and re-applied on every page load. No agent is involved.
+- **Mode Source** : Serveur démarré, page servie par ton serveur de dev (localhost). L'agent modifie les fichiers de ton projet, en trouvant le bon fichier source par le contexte.
+- **Mode Overlay** : Aucun serveur, ou n'importe quel site dont tu n'as pas le code source. Tes modifications rapides (texte, styles) sont enregistrées comme des overrides dans l'extension, par URL de page, et réappliquées à chaque chargement. Aucun agent n'est impliqué.
 
-## Requirements
+## Prérequis
 
 - Node.js 22+
 - pnpm 10+
-- Microsoft Edge or Chrome
-- At least one agent CLI on PATH: `codex` or `claude`
+- Microsoft Edge ou Chrome
+- Au moins un CLI d'agent sur le PATH : `codex` ou `claude`
 
-Agents run in auto-edit mode (the diff Accept/Reject dialog is the safety gate); manage changes with git.
+Les agents fonctionnent en mode auto-edit (la boîte de dialogue Accepter/Rejeter du diff est le garde-fou) ; gère les changements avec git.
 
-## Install
+## Installation
 
-Clone the repo and install dependencies:
+Clone le dépôt et installe les dépendances :
 
 ```sh
 git clone https://github.com/charlescstpierr/vision.git
@@ -35,34 +35,34 @@ pnpm install
 pnpm -r build
 ```
 
-**Load the extension:**
+**Charger l'extension :**
 
-- **Edge**: Open `edge://extensions`, enable Developer mode, click "Load unpacked", select `packages/extension/.output/chrome-mv3`.
-- **Chrome**: Open `chrome://extensions`, enable Developer mode, click "Load unpacked", select `packages/extension/.output/chrome-mv3`.
+- **Edge** : Ouvre `edge://extensions`, active le mode développeur, clique sur « Charger l'extension non empaquetée », sélectionne `packages/extension/.output/chrome-mv3`.
+- **Chrome** : Ouvre `chrome://extensions`, active le mode développeur, clique sur « Charger l'extension non empaquetée », sélectionne `packages/extension/.output/chrome-mv3`.
 
-For an Edge-specific build, run `pnpm --filter @vizion/extension build:edge` (outputs to `.output/edge-mv3`).
+Pour une build spécifique à Edge, lance `pnpm --filter @vizion/extension build:edge` (produit dans `.output/edge-mv3`).
 
-## Run the local server
+## Démarrer le serveur local
 
-From your project folder:
+Depuis le dossier de ton projet :
 
 ```sh
 node /path/to/vizion/packages/server/dist/cli.js
 ```
 
-Add optional `--port` to change the port (default 7331).
+Ajoute l'option `--port` pour changer le port (7331 par défaut).
 
-Once published to npm, use:
+Une fois publié sur npm, utilise :
 
 ```sh
 npx @charlescstpierr/vizion
 ```
 
-The server prints detected agents and binds to `127.0.0.1` only, accepting WebSocket connections from the extension.
+Le serveur affiche les agents détectés et se lie uniquement à `127.0.0.1`, acceptant les connexions WebSocket de l'extension.
 
-## Help the agent find the file (optional)
+## Aider l'agent à trouver le fichier (optionnel)
 
-In a Vite + React project, add the plugin to `vite.config.ts` (dev only, guarded by `command`):
+Dans un projet Vite + React, ajoute le plugin à `vite.config.ts` (dev seulement, protégé par `command`) :
 
 ```ts
 export default defineConfig(({ command }) => ({
@@ -70,47 +70,47 @@ export default defineConfig(({ command }) => ({
 }));
 ```
 
-Install it as a dev dependency:
+Installe-le comme dépendance de dev :
 
 ```sh
 npm i -D @vizion/babel-plugin-source
 ```
 
-It annotates every JSX host element (`div`, `button`, ...) with a `data-vizion-source="file:line:column"` attribute. Vizion reads it from the selected element (or its nearest annotated ancestor) and passes it to the agent, so it starts at the right file instead of guessing from the DOM.
+Il annote chaque élément hôte JSX (`div`, `button`, ...) avec un attribut `data-vizion-source="file:line:column"`. Vizion le lit depuis l'élément sélectionné (ou son ancêtre annoté le plus proche) et le transmet à l'agent, pour qu'il commence au bon fichier plutôt que de deviner à partir du DOM.
 
-## Use it
+## Utilisation
 
-1. Open the side panel (click the toolbar icon).
-2. Status line shows "Source mode" (server + localhost) or "Overlay mode" (no server).
-3. Click "Select element" and click the element to modify.
-4. The element card shows the selector, DOM path, and computed styles.
-5. Quick edits: "Edit text" button, color/size/margin rows, or write a full prompt.
-6. Pick an agent (Codex or Claude), then "Send to agent".
-7. Watch the streaming output in the panel.
-8. When done, review the diff, click "Accept" or "Reject".
+1. Ouvre le panneau latéral (clique sur l'icône de la barre d'outils).
+2. La ligne de statut affiche « Mode Source » (serveur + localhost) ou « Mode Overlay » (aucun serveur).
+3. Clique sur « Sélectionner un élément » et clique sur l'élément à modifier.
+4. La carte d'élément affiche le sélecteur, le chemin DOM et les styles calculés.
+5. Modifications rapides : bouton « Modifier le texte », lignes couleur/taille/marge, ou écris une invite complète.
+6. Choisis un agent (Codex ou Claude), puis « Envoyer à l'agent ».
+7. Regarde le résultat s'afficher en direct dans le panneau.
+8. Une fois terminé, révise le diff, clique sur « Accepter » ou « Rejeter ».
 
-## Windows and macOS notes
+## Notes Windows et macOS
 
-- **Windows**: The server looks for `codex.cmd` and `claude.cmd` on PATH.
-- **macOS**: Ensure the agent CLIs are on the PATH of the shell you start the server from. If you installed via Homebrew or manually, add the bin directory to your shell profile (e.g., `.zshrc` or `.bash_profile`).
+- **Windows** : Le serveur cherche `codex.cmd` et `claude.cmd` sur le PATH.
+- **macOS** : Assure-toi que les CLI d'agent sont sur le PATH du shell depuis lequel tu démarres le serveur. Si tu les as installés via Homebrew ou manuellement, ajoute le dossier bin à ton profil de shell (par ex. `.zshrc` ou `.bash_profile`).
 
-## Development
+## Développement
 
 ```sh
-pnpm -r test         # Run all tests
-pnpm -r typecheck    # TypeScript checks
+pnpm -r test         # Lance tous les tests
+pnpm -r typecheck    # Vérifications TypeScript
 pnpm -r lint         # ESLint
-pnpm --filter @vizion/extension dev  # WXT dev mode (auto-rebuild on change)
+pnpm --filter @vizion/extension dev  # Mode dev WXT (reconstruction auto)
 ```
 
-Architecture and implementation plan: [docs/PLAN.md](docs/PLAN.md)
+Architecture et plan de mise en œuvre : [docs/PLAN.md](docs/PLAN.md)
 
-## Troubleshooting
+## Dépannage
 
-| Issue | Solution |
+| Problème | Solution |
 |-------|----------|
-| "Server not running" in the side panel | Start the server (see "Run the local server"), check that port 7331 is free, or pass `--port`. |
-| "Reload the page to enable Vizion on it." | Content script did not load. Reload the page, or reinstall the extension. |
-| No agents detected | Install `codex` or `claude` CLI, verify it's on PATH, restart the server. |
-| Reject does nothing, empty diff | The diff and reject features need your project to be a git repository. |
-| Overlay mode not persisting | Some sites have strict Content Security Policy or re-render the DOM; overrides may not survive. |
+| « Serveur non démarré » dans le panneau latéral | Démarre le serveur (voir « Démarrer le serveur local »), vérifie que le port 7331 est libre, ou passe `--port`. |
+| « Recharge la page pour activer Vizion dessus. » | Le content script ne s'est pas chargé. Recharge la page, ou réinstalle l'extension. |
+| Aucun agent détecté | Installe le CLI `codex` ou `claude`, vérifie qu'il est sur le PATH, redémarre le serveur. |
+| Rejeter ne fait rien, diff vide | Les fonctionnalités de diff et de rejet nécessitent que ton projet soit un dépôt git. |
+| Le mode Overlay ne persiste pas | Certains sites ont une Content Security Policy stricte ou re-rendent le DOM ; les overrides peuvent ne pas survivre. |

@@ -57,7 +57,7 @@ export default function RunPanel({
           disabled={!hasAgents}
           onChange={(e) => setAgent(e.target.value as AgentKind)}
         >
-          {!hasAgents && <option value="">No agents available</option>}
+          {!hasAgents && <option value="">Aucun agent disponible</option>}
           {agents.map((a) => (
             <option key={a} value={a}>
               {a}
@@ -67,7 +67,7 @@ export default function RunPanel({
       </label>
       {!hasAgents && (
         <p style={{ fontSize: 12, color: '#a83232', marginTop: 4 }}>
-          No agent CLI detected. Install codex or claude.
+          Aucun CLI d'agent détecté. Installe codex ou claude.
         </p>
       )}
 
@@ -76,7 +76,7 @@ export default function RunPanel({
         <textarea
           ref={promptRef}
           style={{ ...fieldStyle, minHeight: 64, resize: 'vertical' }}
-          placeholder="e.g. Make this button blue"
+          placeholder="ex. Mets ce bouton en bleu"
           value={prompt}
           onChange={(e) => setPrompt(e.target.value)}
           onKeyDown={onKeyDown}
@@ -84,7 +84,7 @@ export default function RunPanel({
       </label>
 
       <button style={{ marginTop: 8 }} disabled={!canSend} onClick={submit}>
-        Send to agent
+        Envoyer à l'agent
       </button>
     </div>
   );

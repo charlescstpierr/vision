@@ -21,7 +21,7 @@ test('content script and selection', async ({ context, extensionId, pageUrl }) =
   await btn.hover();
   await btn.click();
 
-  await expect(panel.getByText('Selected element')).toBeVisible();
+  await expect(panel.getByText('Élément sélectionné')).toBeVisible();
   const bodyText = await panel.evaluate(() => document.body.innerText);
   expect(bodyText).toContain('button');
   expect(/\.btn|#main/.test(bodyText)).toBe(true);

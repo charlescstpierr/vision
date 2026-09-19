@@ -38,9 +38,9 @@ export default function ElementCard({ element, onClear, onEditText }: Props) {
   return (
     <div style={cardStyle}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <strong style={{ fontSize: 13 }}>Selected element</strong>
+        <strong style={{ fontSize: 13 }}>Élément sélectionné</strong>
         <button onClick={onClear} style={{ fontSize: 12 }}>
-          Clear
+          Effacer
         </button>
       </div>
 
@@ -49,7 +49,7 @@ export default function ElementCard({ element, onClear, onEditText }: Props) {
       </p>
 
       <button onClick={onEditText} style={{ fontSize: 12, marginTop: 4 }}>
-        Edit text
+        Modifier le texte
       </button>
 
       {element.classes.length > 0 && (
@@ -73,7 +73,7 @@ export default function ElementCard({ element, onClear, onEditText }: Props) {
       </p>
 
       <details style={{ marginTop: 8 }}>
-        <summary style={{ fontSize: 12, cursor: 'pointer' }}>Computed styles</summary>
+        <summary style={{ fontSize: 12, cursor: 'pointer' }}>Styles calculés</summary>
         <div
           style={{
             display: 'grid',

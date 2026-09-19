@@ -4,7 +4,7 @@ export default defineConfig({
   modules: ['@wxt-dev/module-react'],
   manifest: {
     name: 'Vizion',
-    description: 'Edit live websites with a coding agent',
+    description: 'Modifie des sites web en direct avec un agent de code',
     permissions: ['sidePanel', 'activeTab', 'storage', 'scripting', 'tabs'],
     host_permissions: ['http://localhost/*', 'http://127.0.0.1/*'],
     action: {
