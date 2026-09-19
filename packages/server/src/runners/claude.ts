@@ -16,6 +16,14 @@ interface ClaudeLine {
   subtype?: unknown;
   message?: { content?: ClaudeContentBlock[] };
   is_error?: unknown;
+  result?: unknown;
+  error?: unknown;
+}
+
+function resultErrorMessage(obj: ClaudeLine): string {
+  if (typeof obj.result === 'string' && obj.result.trim()) return obj.result;
+  if (typeof obj.error === 'string' && obj.error.trim()) return obj.error;
+  return 'Claude a terminé avec une erreur';
 }
 
 function toolDetail(input: Record<string, unknown> | undefined): string | undefined {
@@ -32,6 +40,7 @@ function toolDetail(input: Record<string, unknown> | undefined): string | undefi
  * - `{"type":"assistant","message":{"content":[{"type":"text","text":...}]}}` -> text
  * - assistant content block `{"type":"tool_use","name":"Bash","input":{"command":...}}` -> tool
  * - `{"type":"result","is_error":false,...}` -> done
+ * - `{"type":"result","is_error":true,...}` -> error (message from `result`/`error`, else a fallback)
  * Any line that isn't valid JSON, or doesn't match a known shape, is ignored.
  */
 export function parseClaudeLine(line: string): AgentEvent[] {
@@ -67,7 +76,10 @@ export function parseClaudeLine(line: string): AgentEvent[] {
   }
 
   if (obj.type === 'result') {
-    return [{ type: 'done', exitCode: obj.is_error ? 1 : 0 }];
+    if (obj.is_error) {
+      return [{ type: 'error', message: resultErrorMessage(obj) }];
+    }
+    return [{ type: 'done', exitCode: 0 }];
   }
 
   return [];
@@ -95,7 +107,7 @@ export class ClaudeRunner implements AgentRunner {
         case 'stdout': {
           const events = parseClaudeLine(item.line);
           for (const event of events) {
-            if (event.type === 'done') sawDone = true;
+            if (event.type === 'done' || event.type === 'error') sawDone = true;
             yield event;
           }
           break;

@@ -50,6 +50,8 @@ async function main(): Promise<void> {
       ? `Agents détectés : ${server.agents.join(', ')}`
       : 'Aucun agent détecté : installe codex ou claude',
   );
+  console.log(`Jeton d'appairage : ${server.token}`);
+  console.log('Colle ce jeton dans les réglages du side panel Vizion (une seule fois).');
 }
 
 main().catch((err: unknown) => {

@@ -72,9 +72,21 @@ describe('parseClaudeLine', () => {
     expect(parseClaudeLine(line)).toEqual([{ type: 'done', exitCode: 0 }]);
   });
 
-  it('turns an errored result line into a done event with exitCode 1', () => {
+  it('turns an errored result line into an error event using the result text', () => {
+    const line = JSON.stringify({
+      type: 'result',
+      is_error: true,
+      subtype: 'error',
+      result: 'Something went wrong',
+    });
+    expect(parseClaudeLine(line)).toEqual([{ type: 'error', message: 'Something went wrong' }]);
+  });
+
+  it('falls back to a generic message when an errored result has no text', () => {
     const line = JSON.stringify({ type: 'result', is_error: true, subtype: 'error' });
-    expect(parseClaudeLine(line)).toEqual([{ type: 'done', exitCode: 1 }]);
+    expect(parseClaudeLine(line)).toEqual([
+      { type: 'error', message: 'Claude a terminé avec une erreur' },
+    ]);
   });
 
   it('ignores lines it does not recognize', () => {

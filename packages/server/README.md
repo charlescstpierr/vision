@@ -22,6 +22,9 @@ Le serveur se lie uniquement à `127.0.0.1`, affiche le port sur lequel il écou
 ainsi que les CLI d'agent (`codex`, `claude`) détectés sur le `PATH`, et accepte
 les connexions WebSocket de l'extension de navigateur Vizion.
 
+Au premier démarrage, il génère un jeton d'appairage (`~/.vizion/token`) et
+l'affiche : colle-le une fois dans les réglages du panneau latéral Vizion.
+
 ## En savoir plus
 
 Consulte le [dépôt principal](https://github.com/charlescstpierr/vision) pour

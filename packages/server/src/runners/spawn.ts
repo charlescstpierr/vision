@@ -33,6 +33,43 @@ async function resolveExecutable(command: string): Promise<string> {
   return command;
 }
 
+export interface BuiltSpawnCommand {
+  command: string;
+  args: string[];
+  windowsVerbatimArguments?: boolean;
+}
+
+/**
+ * Pure helper (no I/O) that turns a resolved executable + args into what to
+ * actually hand to `child_process.spawn`.
+ *
+ * On POSIX this is a no-op. On Windows, npm-installed CLIs resolve (via
+ * `resolveExecutable`) to a `.cmd`/`.bat` shim, which `CreateProcess` cannot
+ * run directly without a shell (`ENOENT`/garbled args) since those are
+ * batch files, not native executables. So instead we spawn the shell
+ * (`ComSpec`, defaulting to `cmd.exe`) with `/d /s /c "<exe>" <args...>`,
+ * quoting each arg that contains spaces, and set
+ * `windowsVerbatimArguments: true` so Node passes that command line through
+ * unmodified (its own default quoting would otherwise mangle it).
+ */
+export function buildSpawnCommand(
+  resolvedExe: string,
+  args: string[],
+  platform: NodeJS.Platform = process.platform,
+): BuiltSpawnCommand {
+  if (platform !== 'win32' || !/\.(cmd|bat)$/i.test(resolvedExe)) {
+    return { command: resolvedExe, args };
+  }
+  const comspec = process.env.ComSpec ?? 'cmd.exe';
+  const quotedArgs = args.map((arg) => (arg.includes(' ') ? `"${arg}"` : arg));
+  const commandLine = [`"${resolvedExe}"`, ...quotedArgs].join(' ');
+  return {
+    command: comspec,
+    args: ['/d', '/s', '/c', commandLine],
+    windowsVerbatimArguments: true,
+  };
+}
+
 export interface SpawnCliOptions {
   cwd: string;
   signal: AbortSignal;
@@ -59,6 +96,7 @@ export async function* spawnCli(
   options: SpawnCliOptions,
 ): AsyncGenerator<SpawnLine> {
   const executable = await resolveExecutable(command);
+  const built = buildSpawnCommand(executable, args);
 
   const queue: SpawnLine[] = [];
   let waiter: (() => void) | null = null;
@@ -75,11 +113,12 @@ export async function* spawnCli(
 
   let child: ChildProcess;
   try {
-    child = nodeSpawn(executable, args, {
+    child = nodeSpawn(built.command, built.args, {
       cwd: options.cwd,
       shell: false,
       signal: options.signal,
       stdio: ['pipe', 'pipe', 'pipe'],
+      ...(built.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
     });
   } catch (err) {
     yield {
@@ -152,6 +191,7 @@ export async function* spawnCli(
  */
 export async function isCommandAvailable(command: string): Promise<boolean> {
   const executable = await resolveExecutable(command);
+  const built = buildSpawnCommand(executable, ['--version']);
 
   return new Promise<boolean>((resolve) => {
     let settled = false;
@@ -165,9 +205,10 @@ export async function isCommandAvailable(command: string): Promise<boolean> {
 
     let child: ChildProcess;
     try {
-      child = nodeSpawn(executable, ['--version'], {
+      child = nodeSpawn(built.command, built.args, {
         shell: false,
         stdio: 'ignore',
+        ...(built.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
       });
     } catch {
       resolve(false);

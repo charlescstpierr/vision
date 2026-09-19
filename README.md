@@ -58,7 +58,9 @@ Une fois publié sur npm, utilise :
 npx @charlescstpierr/vizion
 ```
 
-Le serveur affiche les agents détectés et se lie uniquement à `127.0.0.1`, acceptant les connexions WebSocket de l'extension.
+Le serveur affiche les agents détectés et se lie uniquement à `127.0.0.1`.
+
+**Appairage.** Au démarrage, le serveur affiche un jeton d'appairage (conservé dans `~/.vizion/token`). Ouvre la section « Réglages » du panneau latéral, colle le jeton, et ajuste le port si tu as utilisé `--port`. C'est à faire une seule fois : sans ce jeton, aucune extension ne peut parler au serveur.
 
 ## Aider l'agent à trouver le fichier (optionnel)
 
@@ -109,7 +111,7 @@ Architecture et plan de mise en œuvre : [docs/PLAN.md](docs/PLAN.md)
 
 | Problème | Solution |
 |-------|----------|
-| « Serveur non démarré » dans le panneau latéral | Démarre le serveur (voir « Démarrer le serveur local »), vérifie que le port 7331 est libre, ou passe `--port`. |
+| « Serveur non démarré » dans le panneau latéral | Démarre le serveur (voir « Démarrer le serveur local »), vérifie que le jeton d'appairage est collé dans les réglages et que le port correspond. |
 | « Recharge la page pour activer Vizion dessus. » | Le content script ne s'est pas chargé. Recharge la page, ou réinstalle l'extension. |
 | Aucun agent détecté | Installe le CLI `codex` ou `claude`, vérifie qu'il est sur le PATH, redémarre le serveur. |
 | Rejeter ne fait rien, diff vide | Les fonctionnalités de diff et de rejet nécessitent que ton projet soit un dépôt git. |
