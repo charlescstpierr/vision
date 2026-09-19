@@ -50,8 +50,12 @@ async function main(): Promise<void> {
       ? `Agents détectés : ${server.agents.join(', ')}`
       : 'Aucun agent détecté : installe codex ou claude',
   );
-  console.log(`Jeton d'appairage : ${server.token}`);
-  console.log('Colle ce jeton dans les réglages du side panel Vizion (une seule fois).');
+  console.log('');
+  console.log("Appairage — ouvre cette URL dans le navigateur où Vizion est installé :");
+  console.log(`  http://127.0.0.1:${server.port}/pair?c=${server.pairingCode}`);
+  console.log("L'extension la détecte, puis tu confirmes dans le panneau latéral. À faire une seule fois.");
+  console.log('');
+  console.log(`Sinon, colle ce jeton à la main dans les réglages : ${server.token}`);
 }
 
 main().catch((err: unknown) => {

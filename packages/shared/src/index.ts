@@ -1,6 +1,7 @@
 export * from './extension-messages.js';
 export * from './agent.js';
 export * from './overrides.js';
+export * from './pairing.js';
 
 export const DEFAULT_PORT = 7331;
 

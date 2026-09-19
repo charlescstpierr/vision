@@ -10,10 +10,12 @@ import ProposalView from './components/ProposalView.js';
 import OverridePanel from './components/OverridePanel.js';
 import QuickStyles from './components/QuickStyles.js';
 import SettingsPanel from './components/Settings.js';
+import PairingPrompt from './components/PairingPrompt.js';
 import { useVizionServer } from './hooks/useVizionServer.js';
 import { useActiveTab } from './hooks/useActiveTab.js';
 import { useApplyChange } from './hooks/useApplyChange.js';
 import { useSettings } from './hooks/useSettings.js';
+import { usePendingPairing } from './hooks/usePendingPairing.js';
 import { initialRunState, runReducer } from './state/runState.js';
 import { isLocalUrl } from '../../utils/url.js';
 import { addOverrides } from '../../utils/override-store.js';
@@ -36,6 +38,7 @@ function captureFailureReason(err: unknown): string {
 
 export default function App() {
   const { settings, save: saveSettings } = useSettings();
+  const { pending: pendingPairing, dismiss: dismissPairing } = usePendingPairing();
   const server = useVizionServer(settings);
   const tabUrl = useActiveTab();
   const [selectMode, setSelectMode] = useState(false);
@@ -264,6 +267,16 @@ export default function App() {
         ) : (
           <p>Serveur non démarré. Lance `npx vizion` dans ton projet.</p>
         ))}
+
+      <PairingPrompt
+        pending={pendingPairing}
+        currentPort={settings.port}
+        onConfirm={(pairing) => {
+          saveSettings({ port: pairing.port, token: pairing.token });
+          dismissPairing();
+        }}
+        onDismiss={dismissPairing}
+      />
 
       <SettingsPanel settings={settings} onSave={saveSettings} />
 

@@ -11,6 +11,7 @@ import { WebSocketServer, type WebSocket } from 'ws';
 import type { AgentKind, AgentRunner, ClientMessage, FileDiff, ServerMessage } from '@vizion/shared';
 import { RunHistory } from './history.js';
 import { parseOverlayProposal } from './overlay.js';
+import { createPairingCode, renderPairingPage } from './pairing.js';
 import { createRunners, detectAvailableAgents } from './runners/index.js';
 import { decodeScreenshot, writeScreenshotFile } from './screenshot.js';
 import { buildUndoFiles, computeDiff, restoreSnapshot, takeSnapshot, type Snapshot } from './snapshot.js';
@@ -54,6 +55,8 @@ export interface VizionServer {
   readonly agents: AgentKind[];
   /** The pairing token required to open `/ws`; only meaningful after start() resolves. */
   readonly token: string | null;
+  /** Code guarding `/pair`, for the one-click pairing URL. Only meaningful after start() resolves. */
+  readonly pairingCode: string | null;
 }
 
 /**
@@ -164,10 +167,39 @@ export function createServer(options: CreateServerOptions): VizionServer {
   // Detected once at start() and cached for the lifetime of the server.
   let detectedAgents: AgentKind[] = [];
   let pairingToken: string | null = options.token ?? null;
+  // Guards `/pair`, so only someone who can read the server's own stdout can
+  // make it hand out the connection token. Valid for as long as the process
+  // runs -- no expiry, so reloading the pairing page always works.
+  let pairingCode: string | null = null;
 
   const httpServer = http.createServer((req: IncomingMessage, res: ServerResponse) => {
-    if (req.url === '/health' && req.method === 'GET') {
+    const url = new URL(req.url ?? '', 'http://127.0.0.1');
+    if (url.pathname === '/health' && req.method === 'GET') {
       handleHealth(cwd, detectedAgents, res);
+      return;
+    }
+    if (url.pathname === '/pair' && req.method === 'GET') {
+      const provided = url.searchParams.get('c') ?? '';
+      if (!pairingCode || !timingSafeEqualString(provided, pairingCode)) {
+        res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
+        res.end("Code d'appairage invalide. Relance `vizion` et rouvre l'URL affichée.");
+        return;
+      }
+      const html = renderPairingPage({
+        token: pairingToken ?? '',
+        port: boundPort ?? port,
+        cwd,
+        version: pkg.version,
+      });
+      // No CORS header and no framing: the content script only honours this
+      // payload in a top-level loopback document, and `DENY` stops a remote
+      // page from embedding it to harvest the token in the first place.
+      res.writeHead(200, {
+        'Content-Type': 'text/html; charset=utf-8',
+        'X-Frame-Options': 'DENY',
+        'Cache-Control': 'no-store',
+      });
+      res.end(html);
       return;
     }
     res.writeHead(404, { 'Content-Type': 'application/json' });
@@ -620,6 +652,7 @@ export function createServer(options: CreateServerOptions): VizionServer {
       if (!pairingToken) {
         pairingToken = await loadOrCreateToken();
       }
+      pairingCode = createPairingCode();
       detectedAgents = await detectAvailableAgents(runners);
       await new Promise<void>((resolve) => {
         httpServer.listen(port, '127.0.0.1', () => {
@@ -643,6 +676,9 @@ export function createServer(options: CreateServerOptions): VizionServer {
     },
     get token(): string | null {
       return pairingToken;
+    },
+    get pairingCode(): string | null {
+      return pairingCode;
     },
   };
 }

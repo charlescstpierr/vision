@@ -1398,3 +1398,48 @@ describe('server /health exposure', () => {
     }
   });
 });
+
+describe('server /pair', () => {
+  it('serves the pairing page for the right code and refuses any other', async () => {
+    const cwd = process.cwd();
+    const server = createServer({ port: 0, cwd, runners: [], token: TEST_TOKEN });
+    await server.start();
+    try {
+      const base = `http://127.0.0.1:${server.port}/pair`;
+      expect(server.pairingCode).toMatch(/^[0-9a-f]{32}$/);
+
+      const ok = await fetch(`${base}?c=${server.pairingCode}`);
+      expect(ok.status).toBe(200);
+      expect(ok.headers.get('content-type')).toContain('text/html');
+      // Not embeddable, and not cacheable: it carries the connection token.
+      expect(ok.headers.get('x-frame-options')).toBe('DENY');
+      expect(ok.headers.get('cache-control')).toBe('no-store');
+      expect(ok.headers.get('access-control-allow-origin')).toBeNull();
+
+      const body = await ok.text();
+      expect(body).toContain(TEST_TOKEN);
+      expect(body).toContain(String(server.port));
+
+      for (const bad of ['', '?c=', '?c=wrong', `?c=${'f'.repeat(32)}`]) {
+        const res = await fetch(`${base}${bad}`);
+        expect(res.status).toBe(403);
+        expect(await res.text()).not.toContain(TEST_TOKEN);
+      }
+    } finally {
+      await server.stop();
+    }
+  });
+
+  it('still 404s on unknown paths, and ignores the query string when routing', async () => {
+    const cwd = process.cwd();
+    const server = createServer({ port: 0, cwd, runners: [], token: TEST_TOKEN });
+    await server.start();
+    try {
+      expect((await fetch(`http://127.0.0.1:${server.port}/nope`)).status).toBe(404);
+      // `/health?x=1` used to miss the exact-match route and 404.
+      expect((await fetch(`http://127.0.0.1:${server.port}/health?x=1`)).status).toBe(200);
+    } finally {
+      await server.stop();
+    }
+  });
+});
