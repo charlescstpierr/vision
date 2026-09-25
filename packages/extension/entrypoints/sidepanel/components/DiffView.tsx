@@ -5,6 +5,8 @@ type Props = {
   files: FileDiff[];
   error: string | null;
   restoredFiles: string[] | null;
+  state: 'pending' | 'reject-only';
+  connected: boolean;
   onAccept: () => void;
   onReject: () => void;
 };
@@ -26,7 +28,7 @@ const preStyle: CSSProperties = {
   whiteSpace: 'pre',
 };
 
-export default function DiffView({ files, error, restoredFiles, onAccept, onReject }: Props) {
+export default function DiffView({ files, error, restoredFiles, state, connected, onAccept, onReject }: Props) {
   return (
     <div style={{ marginTop: 12, border: '1px solid #ddd', borderRadius: 8, padding: 10 }}>
       <strong style={{ fontSize: 13 }}>
@@ -35,6 +37,11 @@ export default function DiffView({ files, error, restoredFiles, onAccept, onReje
 
       {files.length === 0 && (
         <p style={{ fontSize: 12, color: '#666', marginTop: 8 }}>L'agent n'a modifié aucun fichier.</p>
+      )}
+      {state === 'reject-only' && (
+        <p style={{ fontSize: 12, color: '#a83232', marginTop: 8 }}>
+          Restauration incomplète : corrige le fichier bloquant puis réessaie le rejet. L'acceptation est impossible.
+        </p>
       )}
 
       {files.map((file) => {
@@ -69,8 +76,8 @@ export default function DiffView({ files, error, restoredFiles, onAccept, onReje
       })}
 
       <div style={{ marginTop: 10, display: 'flex', gap: 8 }}>
-        <button onClick={onAccept}>Accepter</button>
-        <button onClick={onReject}>Rejeter</button>
+        <button disabled={!connected || state !== 'pending'} onClick={onAccept}>Accepter</button>
+        <button disabled={!connected} onClick={onReject}>Rejeter</button>
       </div>
 
       {restoredFiles && (

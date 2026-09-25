@@ -20,5 +20,5 @@ export interface RunRequest {
 export interface AgentRunner {
   readonly kind: AgentKind;
   isAvailable(): Promise<boolean>;
-  run(req: RunRequest & { cwd: string }, signal: AbortSignal): AsyncIterable<AgentEvent>;
+  run(req: RunRequest & { cwd: string; screenshotPath?: string }, signal: AbortSignal): AsyncIterable<AgentEvent>;
 }

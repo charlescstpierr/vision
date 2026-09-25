@@ -123,16 +123,18 @@ async function getCurrentMode(root: string, relPath: string): Promise<number | n
 /** Reads `path` as it was at `sha` (the pre-run HEAD), or null if it did not exist there. */
 async function getBlobAt(root: string, sha: string | null, relPath: string): Promise<Buffer | null> {
   if (!sha) return null;
-  try {
-    const { stdout } = await execFileAsync('git', ['show', `${sha}:${relPath}`], {
-      cwd: root,
-      encoding: 'buffer',
-      maxBuffer: MAX_BUFFER,
-    });
-    return stdout;
-  } catch {
-    return null;
-  }
+  // Only an absent tree entry means "did not exist". Git/I/O failures must
+  // propagate, or reject/undo could delete a file whose baseline was unreadable.
+  const { stdout: entry } = await execFileAsync(
+    'git', ['--literal-pathspecs', 'ls-tree', '-z', sha, '--', relPath], { cwd: root },
+  );
+  if (!entry) return null;
+  const { stdout } = await execFileAsync('git', ['show', `${sha}:${relPath}`], {
+    cwd: root,
+    encoding: 'buffer',
+    maxBuffer: MAX_BUFFER,
+  });
+  return stdout;
 }
 
 /** The regular-file mode (0o644/0o755) for `path` at `sha`, or null if untracked there. */

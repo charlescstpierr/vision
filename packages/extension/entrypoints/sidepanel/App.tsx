@@ -2,6 +2,7 @@ import { useEffect, useReducer, useRef, useState } from 'react';
 import type { AgentKind, ContentToPanelMessage, ElementContext, PanelToContentMessage, Screenshot } from '@vizion/shared';
 import { overrideKey } from '@vizion/shared';
 import { captureElementScreenshot } from '../../utils/screenshot.js';
+import { renderAnnotatedScreenshot } from '../../utils/annotation-render.js';
 import ElementCard from './components/ElementCard.js';
 import RunPanel from './components/RunPanel.js';
 import AgentOutput from './components/AgentOutput.js';
@@ -34,6 +35,9 @@ function captureFailureReason(err: unknown): string {
   return message.replace(/^Capture impossible\s*:\s*/, '');
 }
 
+/** How a capture attempt ended: staged for review, failed (the click may go on without an image), or outdated because the selection or page changed meanwhile. */
+type CaptureOutcome = 'staged' | 'failed' | 'stale';
+
 export default function App() {
   const { settings, save: saveSettings } = useSettings();
   const server = useVizionServer(settings);
@@ -50,6 +54,10 @@ export default function App() {
   // without having sent it yet — distinguishes "Envoyer sans capture" from
   // the initial "Envoyer à l'agent" (no capture attempted yet).
   const [screenshotDismissed, setScreenshotDismissed] = useState(false);
+  // Bumped whenever the selection or page changes, so a capture finishing
+  // afterwards is known to be outdated (see captureAndStage).
+  const captureEpochRef = useRef(0);
+  const selectionKey = elements.map((el) => el.selector).join('|');
 
   useEffect(() => server.subscribe((message) => dispatch({ type: 'server', message })), [server]);
 
@@ -76,8 +84,16 @@ export default function App() {
   // to whichever element happened to be selected.
   useEffect(() => {
     setElements([]);
-    setScreenshotDismissed(false);
   }, [tabUrl]);
+
+  // A staged capture, and the marks drawn on it, shows the selection and page
+  // it was taken from: once either changes it would point the agent at the
+  // wrong target, so it is dropped instead of riding along with the next run.
+  useEffect(() => {
+    captureEpochRef.current += 1;
+    dispatch({ type: 'discard-staged-screenshot' });
+    setScreenshotDismissed(false);
+  }, [selectionKey, tabUrl]);
 
   // Fetch the agent run history as soon as the server says hello (on
   // connect, and on every reconnect). `server.send` is a stable callback
@@ -98,7 +114,9 @@ export default function App() {
   const sendLabel = capturing
     ? 'Capture en cours...'
     : attachScreenshot && stagedScreenshot
-      ? 'Envoyer avec la capture'
+      ? run.annotations.present.length > 0
+        ? 'Envoyer avec la capture annotée'
+        : 'Envoyer avec la capture'
       : attachScreenshot && screenshotDismissed
         ? 'Envoyer sans capture'
         : "Envoyer à l'agent";
@@ -150,7 +168,8 @@ export default function App() {
   };
 
   /** Captures the selected element(s) and stages the result as `run.screenshot` (not sent yet). */
-  const captureAndStage = async (): Promise<Screenshot | null> => {
+  const captureAndStage = async (): Promise<CaptureOutcome> => {
+    const epoch = captureEpochRef.current;
     setCapturing(true);
     setNotice(undefined);
     try {
@@ -161,12 +180,15 @@ export default function App() {
         tab.windowId,
         elements.map((el) => el.selector),
       );
+      // The selection or page changed while capturing: this image no longer
+      // shows what a run would be about, so it is not staged.
+      if (captureEpochRef.current !== epoch) return 'stale';
       dispatch({ type: 'set-screenshot', screenshot });
       setScreenshotDismissed(false);
-      return screenshot;
+      return 'staged';
     } catch (err) {
       setNotice(`Capture impossible, envoi sans image : ${captureFailureReason(err)}`);
-      return null;
+      return 'failed';
     } finally {
       setCapturing(false);
     }
@@ -182,21 +204,36 @@ export default function App() {
   };
 
   // First click (checkbox on, nothing staged yet): captures and stages the
-  // screenshot, then stops — the button relabels to prompt a second click.
-  // Any other click actually starts and sends the run, attaching whatever
-  // is staged (if the checkbox is on).
+  // screenshot, then stops — the button relabels to prompt a second click,
+  // and the capture can be annotated in between. Any other click actually
+  // sends and starts the run, attaching whatever is staged (if the checkbox
+  // is on) with its marks flattened in.
   const runAgent = async (agent: AgentKind, promptText: string) => {
     if (elements.length === 0 || !tabUrl) return;
 
     if (attachScreenshot && !stagedScreenshot) {
-      const captured = await captureAndStage();
-      if (captured) return;
+      const outcome = await captureAndStage();
+      if (outcome !== 'failed') return;
       // Capture failed: fall through and send this click without an image,
       // as before, instead of forcing a third click.
     }
 
-    const screenshot = attachScreenshot ? stagedScreenshot : null;
-    dispatch({ type: 'start', agent, prompt: promptText, pageKey: overrideKey(tabUrl) });
+    const staged = attachScreenshot ? stagedScreenshot : null;
+    let screenshot: Screenshot | null = null;
+    if (staged) {
+      setCapturing(true);
+      try {
+        // Marks are flattened into the image only now, on the explicit send;
+        // until this click they stay editable.
+        screenshot = await renderAnnotatedScreenshot(staged, run.annotations.present);
+      } catch (err) {
+        setNotice(`Annotations impossibles à intégrer, run non envoyé : ${captureFailureReason(err)}`);
+        return;
+      } finally {
+        setCapturing(false);
+      }
+    }
+
     const sent = server.send({
       type: 'run',
       agent,
@@ -206,9 +243,13 @@ export default function App() {
       mode: isSourceMode ? 'source' : 'overlay',
       ...(screenshot ? { screenshot } : {}),
     });
+    // Only a run that actually left starts: after a failed send the staged
+    // capture and its marks stay staged, ready for the next click.
     if (!sent) {
       dispatch({ type: 'send-failed' });
+      return;
     }
+    dispatch({ type: 'start', agent, prompt: promptText, pageKey: overrideKey(tabUrl) });
   };
 
   const applyProposal = async () => {
@@ -297,7 +338,7 @@ export default function App() {
 
       {elements.length > 0 && (
         <QuickStyles
-          key={elements.map((e) => e.selector).join('|')}
+          key={selectionKey}
           element={elements[0]!}
           onApply={(changes) => applyStyleChanges(elements, changes)}
         />
@@ -311,6 +352,7 @@ export default function App() {
         isSourceMode={isSourceMode}
         elementSelected={elements.length > 0}
         running={run.running}
+        decisionPending={run.decision !== null}
         prompt={prompt}
         setPrompt={setPrompt}
         promptRef={promptRef}
@@ -324,6 +366,8 @@ export default function App() {
         capturing={capturing}
         screenshot={run.screenshot}
         screenshotSent={run.screenshotSent}
+        annotations={run.annotations}
+        onAnnotate={dispatch}
         screenshotDismissed={screenshotDismissed}
         sendLabel={sendLabel}
         onRemoveScreenshot={removeStagedScreenshot}
@@ -332,14 +376,37 @@ export default function App() {
 
       <AgentOutput events={run.events} />
 
-      {run.diff && (
+      {run.diff && run.decision?.state !== 'unavailable' && (
         <DiffView
           files={run.diff}
           error={run.error}
           restoredFiles={run.restoredFiles}
-          onAccept={() => server.send({ type: 'accept' })}
-          onReject={() => server.send({ type: 'reject' })}
+          state={run.decision?.state ?? 'pending'}
+          connected={connected}
+          onAccept={() => {
+            if (run.decision) server.send({ type: 'accept', runId: run.decision.runId });
+          }}
+          onReject={() => {
+            if (run.decision) server.send({ type: 'reject', runId: run.decision.runId });
+          }}
         />
+      )}
+
+      {run.decision?.state === 'unavailable' && (
+        <div role="alert" style={{ marginTop: 12, border: '1px solid #a83232', borderRadius: 8, padding: 10 }}>
+          <p style={{ fontSize: 12, color: '#a83232' }}>
+            Diff indisponible : les modifications restent en attente. {run.error}
+          </p>
+          <button disabled={!connected} onClick={() => server.send({ type: 'retry-diff', runId: run.decision!.runId })}>
+            Réessayer le diff
+          </button>
+        </div>
+      )}
+
+      {run.restoredFiles && !run.decision && (
+        <p style={{ color: '#1f6b2c', fontSize: 12 }}>
+          {run.restoredFiles.length} fichier{run.restoredFiles.length === 1 ? '' : 's'} restauré{run.restoredFiles.length === 1 ? '' : 's'}.
+        </p>
       )}
 
       {run.proposal && (
@@ -354,7 +421,7 @@ export default function App() {
         />
       )}
 
-      {run.error && !run.diff && run.events.length === 0 && (
+      {run.error && !run.decision && !run.diff && run.events.length === 0 && (
         <p style={{ color: '#a83232', fontSize: 12, marginTop: 8 }}>{run.error}</p>
       )}
     </div>

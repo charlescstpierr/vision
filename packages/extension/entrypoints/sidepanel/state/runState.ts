@@ -1,10 +1,13 @@
 import type { AgentEvent, AgentKind, FileDiff, OverrideProposal, RunRecord, Screenshot, ServerMessage } from '@vizion/shared';
+import type { Annotation } from '../../../utils/annotations.js';
+import { createHistory, push, undo, type HistoryState } from '../../../utils/edit-history.js';
 
 export interface RunState {
   running: boolean;
   agent: AgentKind | null;
   events: AgentEvent[];
   diff: FileDiff[] | null;
+  decision: { runId: string; state: 'pending' | 'reject-only' | 'unavailable' } | null;
   error: string | null;
   exitCode: number | null;
   restoredFiles: string[] | null;
@@ -32,14 +35,30 @@ export interface RunState {
   /**
    * The capture attached to the current/last run, if any. While a run is
    * being composed this is a *staged* capture (not sent yet) — see
-   * `screenshotSent`. Reset (to `null`) only via `set-screenshot` or
-   * `clear`; `start` deliberately leaves it alone so a staged capture
-   * carries into the run it was taken for.
+   * `screenshotSent`. Reset (to `null`) only via `set-screenshot`,
+   * `discard-staged-screenshot` (staged captures only) or `clear`; `start`
+   * deliberately leaves it alone so a staged capture carries into the run
+   * it was taken for.
    */
   screenshot: Screenshot | null;
   /** Whether `screenshot` has actually been sent with a run. Set true on `start`, reset to false on `clear` / `set-screenshot`. */
   screenshotSent: boolean;
+  /**
+   * The marks drawn on `screenshot`, with their undo history. Editable only
+   * while the capture is staged; flattened into the image only when the run
+   * is sent, and kept afterwards to show what went out with it. Emptied
+   * whenever the capture itself is replaced or dropped.
+   */
+  annotations: HistoryState<Annotation>;
 }
+
+/** Edits to the marks on the staged capture; ignored when no capture is staged. */
+export type AnnotationAction =
+  | { type: 'add-annotation'; annotation: Annotation }
+  | { type: 'update-annotation'; index: number; annotation: Annotation }
+  | { type: 'remove-annotation'; index: number }
+  | { type: 'undo-annotation' }
+  | { type: 'clear-annotations' };
 
 export type RunAction =
   | { type: 'server'; message: ServerMessage }
@@ -48,14 +67,20 @@ export type RunAction =
   | { type: 'clear-proposal' }
   | { type: 'proposal-error'; message: string }
   | { type: 'set-screenshot'; screenshot: Screenshot | null }
-  /** The WebSocket send for a `run` failed (server connection lost): roll the run back to not-running. */
+  /** The selection or page changed: a capture not sent yet no longer shows what a run would be about. */
+  | { type: 'discard-staged-screenshot' }
+  | AnnotationAction
+  /** The WebSocket send for a `run` failed (server connection lost): the run is not running; report why. */
   | { type: 'send-failed' };
+
+const NO_ANNOTATIONS: HistoryState<Annotation> = createHistory<Annotation>();
 
 export const initialRunState: RunState = {
   running: false,
   agent: null,
   events: [],
   diff: null,
+  decision: null,
   error: null,
   exitCode: null,
   restoredFiles: null,
@@ -66,7 +91,29 @@ export const initialRunState: RunState = {
   proposalError: null,
   screenshot: null,
   screenshotSent: false,
+  annotations: NO_ANNOTATIONS,
 };
+
+function annotate(state: RunState, action: AnnotationAction): RunState {
+  if (!state.screenshot || state.screenshotSent) return state;
+  const history = state.annotations;
+  const marks = history.present;
+  switch (action.type) {
+    case 'add-annotation':
+      return { ...state, annotations: push(history, [...marks, action.annotation]) };
+    case 'update-annotation':
+      return {
+        ...state,
+        annotations: push(history, marks.map((mark, index) => (index === action.index ? action.annotation : mark))),
+      };
+    case 'remove-annotation':
+      return { ...state, annotations: push(history, marks.filter((_, index) => index !== action.index)) };
+    case 'undo-annotation':
+      return history.past.length === 0 ? state : { ...state, annotations: undo(history) };
+    case 'clear-annotations':
+      return marks.length === 0 ? state : { ...state, annotations: push(history, []) };
+  }
+}
 
 export function runReducer(state: RunState, action: RunAction): RunState {
   switch (action.type) {
@@ -77,6 +124,7 @@ export function runReducer(state: RunState, action: RunAction): RunState {
         agent: action.agent,
         events: [],
         diff: null,
+        decision: null,
         error: null,
         exitCode: null,
         restoredFiles: null,
@@ -93,7 +141,17 @@ export function runReducer(state: RunState, action: RunAction): RunState {
     case 'proposal-error':
       return { ...state, proposalError: action.message };
     case 'set-screenshot':
-      return { ...state, screenshot: action.screenshot, screenshotSent: false };
+      return { ...state, screenshot: action.screenshot, screenshotSent: false, annotations: NO_ANNOTATIONS };
+    case 'discard-staged-screenshot':
+      return state.screenshot && !state.screenshotSent
+        ? { ...state, screenshot: null, annotations: NO_ANNOTATIONS }
+        : state;
+    case 'add-annotation':
+    case 'update-annotation':
+    case 'remove-annotation':
+    case 'undo-annotation':
+    case 'clear-annotations':
+      return annotate(state, action);
     case 'send-failed':
       return { ...state, running: false, error: 'Connexion au serveur perdue, run non envoyé.' };
     case 'server': {
@@ -111,7 +169,19 @@ export function runReducer(state: RunState, action: RunAction): RunState {
           return { ...state, events };
         }
         case 'diff':
-          return { ...state, diff: message.files };
+          if (message.state === 'resolved') {
+            return state.decision?.runId === message.runId
+              ? { ...state, decision: null, diff: null, error: null, running: false }
+              : state;
+          }
+          return {
+            ...state,
+            decision: { runId: message.runId, state: message.state },
+            diff: message.files,
+            error: null,
+            running: false,
+            restoredFiles: null,
+          };
         case 'overlay-proposal':
           return {
             ...state,
@@ -120,7 +190,16 @@ export function runReducer(state: RunState, action: RunAction): RunState {
         case 'restored':
           return { ...state, restoredFiles: message.files };
         case 'error':
-          return { ...state, running: false, error: message.message };
+          return {
+            ...state,
+            running: false,
+            error: message.paths?.length ? `${message.message} (${message.paths.join(', ')})` : message.message,
+            decision: message.code === 'diff-unavailable' && message.runId
+              ? { runId: message.runId, state: 'unavailable' }
+              : message.code === 'reject-only' && message.runId
+                ? { runId: message.runId, state: 'reject-only' }
+                : state.decision,
+          };
         case 'history':
           return { ...state, runs: message.runs };
         case 'run-undone':
@@ -136,6 +215,9 @@ export function runReducer(state: RunState, action: RunAction): RunState {
             error: null,
           };
         case 'hello':
+          // The server replays its pending decision after hello. Until that
+          // replay, no decision from a previous connection is authoritative.
+          return { ...state, decision: null, diff: null, error: null, running: false };
         case 'pong':
           return state;
         default:

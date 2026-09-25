@@ -92,12 +92,15 @@ class FakeRunner implements AgentRunner {
  * arriving before the first `await` in a test gets a chance to attach a
  * listener).
  */
-function createMessageReader(ws: WebSocket): { next(): Promise<ServerMessage> } {
+function createMessageReader(ws: WebSocket): { readonly runId: string; next(): Promise<ServerMessage> } {
   const queue: ServerMessage[] = [];
   let waiter: (() => void) | null = null;
+  let runId: string | null = null;
 
   ws.on('message', (data: Buffer) => {
-    queue.push(JSON.parse(data.toString('utf8')) as ServerMessage);
+    const message: ServerMessage = JSON.parse(data.toString('utf8'));
+    if (message.type === 'diff') runId = message.runId;
+    queue.push(message);
     if (waiter) {
       const resolve = waiter;
       waiter = null;
@@ -106,6 +109,10 @@ function createMessageReader(ws: WebSocket): { next(): Promise<ServerMessage> } 
   });
 
   return {
+    get runId(): string {
+      if (!runId) throw new Error('expected a run-scoped diff');
+      return runId;
+    },
     async next(): Promise<ServerMessage> {
       while (queue.length === 0) {
         await new Promise<void>((resolve) => {
@@ -183,7 +190,7 @@ describe('server websocket', () => {
         { type: 'event', event: { type: 'text', text: 'hello' } },
         { type: 'event', event: { type: 'text', text: 'world' } },
         { type: 'event', event: { type: 'done', exitCode: 0 } },
-        { type: 'diff', files: [] },
+        { type: 'diff', runId: reader.runId, state: 'pending', files: [] },
       ]);
 
       // A pending (undecided) diff must block a new run.
@@ -194,8 +201,8 @@ describe('server websocket', () => {
         message: "Accepte ou rejette d'abord les modifications en attente.",
       });
 
-      ws.send(JSON.stringify({ type: 'accept' }));
-      expect(await reader.next()).toEqual({ type: 'diff', files: [] });
+      ws.send(JSON.stringify({ type: 'accept', runId: reader.runId }));
+      expect(await reader.next()).toEqual({ type: 'diff', runId: reader.runId, state: 'resolved', files: [] });
       const acceptedHistory = await reader.next();
       if (acceptedHistory.type !== 'history') throw new Error('expected history message');
       expect(acceptedHistory.runs).toHaveLength(1);
@@ -314,6 +321,67 @@ describe('server websocket', () => {
       await server.stop();
     }
   });
+
+  it('keeps the run reserved until an aborted agent stops after its socket closes', async () => {
+    const releaseRunHolder: { current: (() => void) | null } = { current: null };
+    const abortedHolder: { resolve: (() => void) | null } = { resolve: null };
+    const aborted = new Promise<void>((resolve) => { abortedHolder.resolve = resolve; });
+    const secondStartedHolder: { resolve: (() => void) | null } = { resolve: null };
+    const secondStarted = new Promise<void>((resolve) => { secondStartedHolder.resolve = resolve; });
+    let availabilityChecks = 0;
+    class AbortingRunner implements AgentRunner {
+      readonly kind = 'claude' as const;
+      isAvailable(): Promise<boolean> {
+        availabilityChecks++;
+        if (availabilityChecks === 3) secondStartedHolder.resolve?.();
+        return Promise.resolve(true);
+      }
+      async *run(_request: unknown, signal: AbortSignal): AsyncIterable<AgentEvent> {
+        signal.addEventListener('abort', () => abortedHolder.resolve?.(), { once: true });
+        yield { type: 'started', agent: 'claude' };
+        await new Promise<void>((resolve) => {
+          releaseRunHolder.current = resolve;
+        });
+        if (signal.aborted) return;
+        yield { type: 'done', exitCode: 0 };
+      }
+    }
+
+    const server = createServer({
+      port: 0,
+      cwd: process.cwd(),
+      runners: [new AbortingRunner()],
+      allowedOriginPrefixes: [TEST_ORIGIN],
+      token: TEST_TOKEN,
+    });
+    await server.start();
+    try {
+      const { ws: wsA, reader: readerA } = await openSocket(server.port);
+      await readerA.next();
+      await readerA.next();
+      const { ws: wsB, reader: readerB } = await openSocket(server.port);
+      await readerB.next();
+      await readerB.next();
+
+      wsA.send(JSON.stringify({ type: 'run', agent: 'claude', prompt: 'first', element }));
+      expect(await readerA.next()).toEqual({ type: 'event', event: { type: 'started', agent: 'claude' } });
+      const closed = new Promise<void>((resolve) => wsA.once('close', resolve));
+      wsA.close();
+      await closed;
+      await aborted;
+
+      wsB.send(JSON.stringify({ type: 'run', agent: 'claude', prompt: 'second', element }));
+      const response = await Promise.race([
+        readerB.next(),
+        secondStarted.then(() => ({ type: 'unexpected-run' })),
+      ]);
+      wsB.close();
+      expect(response).toEqual({ type: 'error', message: 'Un run est déjà en cours.' });
+    } finally {
+      releaseRunHolder.current?.();
+      await server.stop();
+    }
+  });
 });
 
 class FileWritingRunner implements AgentRunner {
@@ -369,15 +437,15 @@ describe('server diff / accept / reject', () => {
       expect(diffMessage.files).toHaveLength(1);
       expect(diffMessage.files[0]).toMatchObject({ path: 'touched.txt', status: 'added' });
 
-      ws.send(JSON.stringify({ type: 'reject' }));
+      ws.send(JSON.stringify({ type: 'reject', runId: reader.runId }));
       const restoredMessage = await reader.next();
       expect(restoredMessage).toEqual({ type: 'restored', files: ['touched.txt'] });
       const afterReject = await reader.next();
-      expect(afterReject).toEqual({ type: 'diff', files: [] });
+      expect(afterReject).toEqual({ type: 'diff', runId: reader.runId, state: 'resolved', files: [] });
       expect(await reader.next()).toEqual({ type: 'history', runs: [] });
       await expect(fs.readFile(path.join(cwd, 'touched.txt'))).rejects.toThrow();
 
-      ws.send(JSON.stringify({ type: 'reject' }));
+      ws.send(JSON.stringify({ type: 'reject', runId: reader.runId }));
       const secondReject = await reader.next();
       expect(secondReject).toEqual({ type: 'error', message: 'rien à accepter ou rejeter' });
 
@@ -460,8 +528,8 @@ describe('server run history / undo', () => {
       if (diffMessage?.type !== 'diff') throw new Error('expected diff message');
       expect(diffMessage.files.map((f) => f.path).sort()).toEqual(['new.txt', 'tracked.txt']);
 
-      ws.send(JSON.stringify({ type: 'accept' }));
-      expect(await reader.next()).toEqual({ type: 'diff', files: [] });
+      ws.send(JSON.stringify({ type: 'accept', runId: reader.runId }));
+      expect(await reader.next()).toEqual({ type: 'diff', runId: reader.runId, state: 'resolved', files: [] });
       const historyAfterAccept = await reader.next();
       if (historyAfterAccept.type !== 'history') throw new Error('expected history message');
       expect(historyAfterAccept.runs).toHaveLength(1);
@@ -527,7 +595,7 @@ describe('server run history / undo', () => {
       if (diffMessage?.type !== 'diff') throw new Error('expected diff message');
       expect(diffMessage.files).toEqual([expect.objectContaining({ path: 'tracked.txt', status: 'deleted' })]);
 
-      ws.send(JSON.stringify({ type: 'accept' }));
+      ws.send(JSON.stringify({ type: 'accept', runId: reader.runId }));
       await reader.next(); // diff []
       const historyMsg = await reader.next();
       if (historyMsg.type !== 'history') throw new Error('expected history');
@@ -619,7 +687,7 @@ describe('server run history / undo', () => {
         ws.send(JSON.stringify({ type: 'run', agent, prompt, element }));
         const evts: ServerMessage[] = [];
         while (evts.length < 3) evts.push(await reader.next());
-        ws.send(JSON.stringify({ type: 'accept' }));
+        ws.send(JSON.stringify({ type: 'accept', runId: reader.runId }));
         await reader.next(); // diff []
         const historyMsg = await reader.next();
         if (historyMsg.type !== 'history') throw new Error('expected history');
@@ -762,7 +830,7 @@ describe('server undo-run: byte-based restore', () => {
       if (diffMessage?.type !== 'diff') throw new Error('expected diff message');
       expect(diffMessage.files.map((f) => f.path).sort()).toEqual(['image.bin', 'new.bin']);
 
-      ws.send(JSON.stringify({ type: 'accept' }));
+      ws.send(JSON.stringify({ type: 'accept', runId: reader.runId }));
       await reader.next(); // diff []
       const historyMsg = await reader.next();
       if (historyMsg.type !== 'history') throw new Error('expected history');
@@ -807,7 +875,7 @@ describe('server undo-run: byte-based restore', () => {
       if (diffMessage?.type !== 'diff') throw new Error('expected diff message');
       expect(diffMessage.files).toEqual([expect.objectContaining({ path: 'empty.txt', status: 'added' })]);
 
-      ws.send(JSON.stringify({ type: 'accept' }));
+      ws.send(JSON.stringify({ type: 'accept', runId: reader.runId }));
       await reader.next(); // diff []
       const historyMsg = await reader.next();
       if (historyMsg.type !== 'history') throw new Error('expected history');
@@ -851,7 +919,7 @@ describe('server undo-run: byte-based restore', () => {
       if (diffMessage?.type !== 'diff') throw new Error('expected diff message');
       expect(diffMessage.files).toEqual([expect.objectContaining({ path: 'script.sh', status: 'modified' })]);
 
-      ws.send(JSON.stringify({ type: 'accept' }));
+      ws.send(JSON.stringify({ type: 'accept', runId: reader.runId }));
       await reader.next(); // diff []
       const historyMsg = await reader.next();
       if (historyMsg.type !== 'history') throw new Error('expected history');
@@ -898,7 +966,7 @@ describe('server undo-run: byte-based restore', () => {
       if (diffMessage?.type !== 'diff') throw new Error('expected diff message');
       expect(diffMessage.files).toEqual([expect.objectContaining({ path: 'tracked.txt', status: 'deleted' })]);
 
-      ws.send(JSON.stringify({ type: 'accept' }));
+      ws.send(JSON.stringify({ type: 'accept', runId: reader.runId }));
       await reader.next(); // diff []
       const historyMsg = await reader.next();
       if (historyMsg.type !== 'history') throw new Error('expected history');
@@ -947,6 +1015,7 @@ describe('server: multi-client broadcast and ordering', () => {
       const events: ServerMessage[] = [];
       while (events.length < 3) events.push(await readerA.next());
       expect(events[2]?.type).toBe('diff'); // A now has a pending, undecided diff
+      expect(await readerB.next()).toEqual(events[2]);
 
       // B's run is refused: a pending diff exists project-wide, not just on A's socket.
       wsB.send(JSON.stringify({ type: 'run', agent: 'claude', prompt: 'p2', element }));
@@ -955,13 +1024,14 @@ describe('server: multi-client broadcast and ordering', () => {
         message: "Accepte ou rejette d'abord les modifications en attente.",
       });
 
-      wsA.send(JSON.stringify({ type: 'accept' }));
-      expect(await readerA.next()).toEqual({ type: 'diff', files: [] });
+      wsA.send(JSON.stringify({ type: 'accept', runId: readerA.runId }));
+      expect(await readerA.next()).toEqual({ type: 'diff', runId: readerA.runId, state: 'resolved', files: [] });
       const historyA = await readerA.next();
       if (historyA.type !== 'history') throw new Error('expected history');
       expect(historyA.runs).toHaveLength(1);
 
-      // B, which never accepted or rejected anything itself, still sees the broadcast.
+      // B sees resolution before history, just like the accepting client.
+      expect(await readerB.next()).toMatchObject({ type: 'diff', state: 'resolved' });
       const historyB = await readerB.next();
       if (historyB.type !== 'history') throw new Error('expected history');
       expect(historyB.runs).toHaveLength(1);
