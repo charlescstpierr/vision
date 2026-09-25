@@ -1,5 +1,8 @@
 import type { RectReply, Screenshot } from '@vizion/shared';
 
+/** JPEG quality of every capture sent to the agent: the original crop and its annotated re-encode alike. */
+export const CAPTURE_JPEG_QUALITY = 0.85;
+
 export interface CropBox {
   x: number;
   y: number;
@@ -139,7 +142,7 @@ export async function captureElementScreenshot(
   ctx.drawImage(bitmap, crop.x, crop.y, crop.width, crop.height, 0, 0, target.width, target.height);
 
   return {
-    dataUrl: canvas.toDataURL('image/jpeg', 0.85),
+    dataUrl: canvas.toDataURL('image/jpeg', CAPTURE_JPEG_QUALITY),
     width: target.width,
     height: target.height,
   };

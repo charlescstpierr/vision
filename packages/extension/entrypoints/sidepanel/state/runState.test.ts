@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { FileDiff, OverrideProposal, RunRecord, Screenshot, ServerMessage } from '@vizion/shared';
+import type { Annotation } from '../../../utils/annotations.js';
 import { initialRunState, runReducer, type RunState } from './runState.js';
 
 const PAGE_KEY = 'https://example.com/page';
@@ -16,6 +17,7 @@ describe('runReducer', () => {
       agent: 'codex',
       events: [],
       diff: null,
+      decision: null,
       error: null,
       exitCode: null,
       restoredFiles: null,
@@ -26,6 +28,7 @@ describe('runReducer', () => {
       proposalError: null,
       screenshot: null,
       screenshotSent: true,
+      annotations: { past: [], present: [], future: [] },
     });
   });
 
@@ -68,8 +71,9 @@ describe('runReducer', () => {
   it('diff message sets the diff', () => {
     let state = start();
     const files: FileDiff[] = [{ path: 'a.ts', status: 'modified', patch: '@@ -1 +1 @@' }];
-    state = runReducer(state, { type: 'server', message: { type: 'diff', files } });
+    state = runReducer(state, { type: 'server', message: { type: 'diff', runId: 'run-1', state: 'pending', files } });
     expect(state.diff).toEqual(files);
+    expect(state.decision).toEqual({ runId: 'run-1', state: 'pending' });
   });
 
   it('restored message records the restored file list', () => {
@@ -85,15 +89,55 @@ describe('runReducer', () => {
     expect(state.restoredFiles).toBeNull();
   });
 
-  it('hello and pong messages are no-ops', () => {
+  it('hello clears a stale decision before the server replays its current one', () => {
     const before = start();
     const afterHello = runReducer(before, {
       type: 'server',
       message: { type: 'hello', version: '0.0.0', cwd: '/tmp', agents: [] },
     });
-    expect(afterHello).toEqual(before);
+    expect(afterHello.running).toBe(false);
+    expect(afterHello.decision).toBeNull();
     const afterPong = runReducer(before, { type: 'server', message: { type: 'pong' } });
     expect(afterPong).toEqual(before);
+  });
+
+  it('replays a pending decision after reconnect and clears it only when resolved', () => {
+    const files: FileDiff[] = [{ path: 'a.ts', status: 'modified', patch: 'patch' }];
+    let state = runReducer(initialRunState, {
+      type: 'server', message: { type: 'diff', runId: 'first', state: 'pending', files },
+    });
+    state = runReducer(state, {
+      type: 'server', message: { type: 'hello', version: '0.0.0', cwd: '/tmp', agents: [] },
+    });
+    expect(state.decision).toBeNull();
+    state = runReducer(state, {
+      type: 'server', message: { type: 'diff', runId: 'first', state: 'pending', files },
+    });
+    state = runReducer(state, {
+      type: 'server', message: { type: 'error', runId: 'first', code: 'reject-only', message: 'restore failed' },
+    });
+    expect(state.decision).toEqual({ runId: 'first', state: 'reject-only' });
+    state = runReducer(state, {
+      type: 'server', message: { type: 'diff', runId: 'other', state: 'resolved', files: [] },
+    });
+    expect(state.decision?.runId).toBe('first');
+    state = runReducer(state, {
+      type: 'server', message: { type: 'diff', runId: 'first', state: 'resolved', files: [] },
+    });
+    expect(state.decision).toBeNull();
+    expect(state.diff).toBeNull();
+  });
+
+  it('keeps a retryable unavailable diff and displays oversized dirty paths', () => {
+    let state = runReducer(initialRunState, {
+      type: 'server', message: { type: 'error', runId: 'first', code: 'diff-unavailable', message: 'Git inaccessible' },
+    });
+    expect(state.decision).toEqual({ runId: 'first', state: 'unavailable' });
+    state = runReducer(state, {
+      type: 'server', message: { type: 'error', code: 'snapshot-too-large', paths: ['large.bin'], message: 'Run refusé' },
+    });
+    expect(state.decision?.runId).toBe('first');
+    expect(state.error).toContain('large.bin');
   });
 
   it('unknown ServerMessage types are a no-op (forward compatibility)', () => {
@@ -274,5 +318,91 @@ describe('runReducer', () => {
     state = runReducer(state, { type: 'clear-proposal' });
     expect(state.proposal).toBeNull();
     expect(state.running).toBe(true);
+  });
+});
+
+describe('runReducer annotations', () => {
+  const SHOT: Screenshot = { dataUrl: 'data:image/jpeg;base64,abc', width: 120, height: 80 };
+  const ARROW: Annotation = { tool: 'arrow', from: { x: 10, y: 70 }, to: { x: 60, y: 20 } };
+  const CIRCLE: Annotation = { tool: 'circle', from: { x: 70, y: 10 }, to: { x: 110, y: 50 } };
+
+  /** A staged (not yet sent) capture with `marks` drawn on it, one at a time. */
+  function staged(...marks: Annotation[]): RunState {
+    let state = runReducer(initialRunState, { type: 'set-screenshot', screenshot: SHOT });
+    for (const annotation of marks) {
+      state = runReducer(state, { type: 'add-annotation', annotation });
+    }
+    return state;
+  }
+
+  it('add-annotation draws marks on the staged capture in order', () => {
+    expect(staged(ARROW, CIRCLE).annotations.present).toEqual([ARROW, CIRCLE]);
+  });
+
+  it('undo-annotation takes back only the last mark', () => {
+    const state = runReducer(staged(ARROW, CIRCLE), { type: 'undo-annotation' });
+    expect(state.annotations.present).toEqual([ARROW]);
+  });
+
+  it('undo-annotation puts an edited mark back the way it was', () => {
+    const moved: Annotation = { ...ARROW, to: { x: 90, y: 40 } };
+    let state = runReducer(staged(ARROW), { type: 'update-annotation', index: 0, annotation: moved });
+    expect(state.annotations.present).toEqual([moved]);
+    state = runReducer(state, { type: 'undo-annotation' });
+    expect(state.annotations.present).toEqual([ARROW]);
+  });
+
+  it('undo-annotation with nothing left to undo is a no-op', () => {
+    const state = staged();
+    expect(runReducer(state, { type: 'undo-annotation' })).toBe(state);
+  });
+
+  it('remove-annotation deletes only the chosen mark', () => {
+    const state = runReducer(staged(ARROW, CIRCLE), { type: 'remove-annotation', index: 0 });
+    expect(state.annotations.present).toEqual([CIRCLE]);
+  });
+
+  it('clear-annotations removes every mark but keeps the capture staged', () => {
+    const state = runReducer(staged(ARROW, CIRCLE), { type: 'clear-annotations' });
+    expect(state.annotations.present).toEqual([]);
+    expect(state.screenshot).toEqual(SHOT);
+    expect(state.screenshotSent).toBe(false);
+  });
+
+  it('a clear can itself be undone, bringing every mark back', () => {
+    let state = runReducer(staged(ARROW, CIRCLE), { type: 'clear-annotations' });
+    state = runReducer(state, { type: 'undo-annotation' });
+    expect(state.annotations.present).toEqual([ARROW, CIRCLE]);
+  });
+
+  it('ignores annotation edits when no capture is staged', () => {
+    expect(runReducer(initialRunState, { type: 'add-annotation', annotation: ARROW })).toBe(initialRunState);
+  });
+
+  it('keeps the marks a capture was sent with, and ignores edits once the run started', () => {
+    const sent = start(staged(ARROW));
+    expect(sent.screenshotSent).toBe(true);
+    expect(sent.annotations.present).toEqual([ARROW]);
+    expect(runReducer(sent, { type: 'add-annotation', annotation: CIRCLE })).toBe(sent);
+    expect(runReducer(sent, { type: 'undo-annotation' })).toBe(sent);
+    expect(runReducer(sent, { type: 'clear-annotations' })).toBe(sent);
+  });
+
+  it('a new capture starts with no marks and nothing to undo', () => {
+    const retaken: Screenshot = { ...SHOT, dataUrl: 'data:image/jpeg;base64,def' };
+    const state = runReducer(staged(ARROW), { type: 'set-screenshot', screenshot: retaken });
+    expect(state.annotations.present).toEqual([]);
+    expect(state.annotations.past).toEqual([]);
+  });
+
+  it('discard-staged-screenshot drops an unsent capture together with its marks', () => {
+    const state = runReducer(staged(ARROW), { type: 'discard-staged-screenshot' });
+    expect(state.screenshot).toBeNull();
+    expect(state.annotations.present).toEqual([]);
+  });
+
+  it('discard-staged-screenshot keeps a capture already sent with a run', () => {
+    const sent = start(staged(ARROW));
+    expect(runReducer(sent, { type: 'discard-staged-screenshot' })).toBe(sent);
   });
 });

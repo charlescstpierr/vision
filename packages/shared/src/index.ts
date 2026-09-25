@@ -77,8 +77,9 @@ export type ClientMessage =
       /** Optional JPEG/PNG capture of the selected element(s), as a data URL (max ~2 MB). */
       screenshot?: Screenshot;
     }
-  | { type: 'accept' }
-  | { type: 'reject' }
+  | { type: 'accept'; runId: string }
+  | { type: 'reject'; runId: string }
+  | { type: 'retry-diff'; runId: string }
   | { type: 'undo-run'; id: string }
   | { type: 'list-history' }
   | { type: 'ping' };
@@ -86,10 +87,16 @@ export type ClientMessage =
 export type ServerMessage =
   | { type: 'hello'; version: string; cwd: string; agents: AgentKind[] }
   | { type: 'event'; event: AgentEvent }
-  | { type: 'diff'; files: FileDiff[] }
+  | { type: 'diff'; runId: string; state: 'pending' | 'reject-only' | 'resolved'; files: FileDiff[] }
   | { type: 'restored'; files: string[] }
   | { type: 'history'; runs: RunRecord[] }
   | { type: 'overlay-proposal'; overrides: OverrideProposal[]; note?: string }
   | { type: 'run-undone'; id: string; files: string[] }
   | { type: 'pong' }
-  | { type: 'error'; message: string };
+  | {
+      type: 'error';
+      message: string;
+      runId?: string;
+      code?: 'diff-unavailable' | 'snapshot-too-large' | 'reject-only';
+      paths?: string[];
+    };

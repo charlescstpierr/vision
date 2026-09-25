@@ -1,5 +1,10 @@
 import { useEffect, useState, type CSSProperties, type KeyboardEvent, type RefObject } from 'react';
 import type { AgentKind, RunRecord, Screenshot } from '@vizion/shared';
+import type { Annotation } from '../../../utils/annotations.js';
+import type { HistoryState } from '../../../utils/edit-history.js';
+import type { AnnotationAction } from '../state/runState.js';
+import CaptureThumbnail from './CaptureThumbnail.js';
+import ScreenshotAnnotator from './ScreenshotAnnotator.js';
 
 type Props = {
   agents: AgentKind[];
@@ -7,6 +12,7 @@ type Props = {
   isSourceMode: boolean;
   elementSelected: boolean;
   running: boolean;
+  decisionPending: boolean;
   prompt: string;
   setPrompt: (next: string) => void;
   promptRef?: RefObject<HTMLTextAreaElement>;
@@ -25,6 +31,9 @@ type Props = {
   screenshot: Screenshot | null;
   /** True once `screenshot` has actually been sent with a run. */
   screenshotSent: boolean;
+  /** Marks drawn on `screenshot` (editable while it is staged) and their undo history. */
+  annotations: HistoryState<Annotation>;
+  onAnnotate: (action: AnnotationAction) => void;
   /** True once the user removed a staged capture ("Retirer") without sending it. */
   screenshotDismissed: boolean;
   /** Label for the send button, reflecting the stage → send flow (see App.tsx). */
@@ -57,6 +66,7 @@ export default function RunPanel({
   isSourceMode,
   elementSelected,
   running,
+  decisionPending,
   prompt,
   setPrompt,
   promptRef,
@@ -70,6 +80,8 @@ export default function RunPanel({
   capturing,
   screenshot,
   screenshotSent,
+  annotations,
+  onAnnotate,
   screenshotDismissed,
   sendLabel,
   onRemoveScreenshot,
@@ -88,7 +100,7 @@ export default function RunPanel({
 
   const hasAgents = agents.length > 0;
   const canSend =
-    connected && elementSelected && agent !== '' && prompt.trim().length > 0 && !running && !capturing;
+    connected && elementSelected && agent !== '' && prompt.trim().length > 0 && !running && !decisionPending && !capturing;
 
   const sortedRuns = [...runs].sort((a, b) => b.createdAt - a.createdAt);
   const mostRecentAcceptedId = sortedRuns.find((r) => r.status === 'accepted')?.id;
@@ -158,30 +170,24 @@ export default function RunPanel({
         Joindre une capture de l'élément
       </label>
 
-      {screenshot && (
+      {screenshot && !screenshotSent && (
+        <ScreenshotAnnotator
+          key={screenshot.dataUrl}
+          screenshot={screenshot}
+          annotations={annotations}
+          onAnnotate={onAnnotate}
+          onRemove={onRemoveScreenshot}
+        />
+      )}
+
+      {screenshot && screenshotSent && (
         <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
-          <img
-            src={screenshot.dataUrl}
-            alt="Capture de l'élément sélectionné"
-            style={{ maxWidth: 120, maxHeight: 120, borderRadius: 4, border: '1px solid #ddd', display: 'block' }}
-          />
+          <CaptureThumbnail screenshot={screenshot} marks={annotations.present} />
           <div style={{ fontSize: 11, color: '#666' }}>
             <div>
               {screenshot.width}×{screenshot.height}px
             </div>
-            {screenshotSent ? (
-              <div>Envoyée avec le run</div>
-            ) : (
-              <a
-                href="#"
-                onClick={(e) => {
-                  e.preventDefault();
-                  onRemoveScreenshot();
-                }}
-              >
-                Retirer
-              </a>
-            )}
+            <div>Envoyée avec le run</div>
           </div>
         </div>
       )}

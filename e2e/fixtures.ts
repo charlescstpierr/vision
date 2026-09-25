@@ -10,6 +10,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const EXTENSION_PATH = path.resolve(__dirname, '../packages/extension/.output/chrome-mv3');
 const PAGES_DIR = path.resolve(__dirname, 'pages');
 const CHROMIUM_EXECUTABLE = '/opt/pw-browsers/chromium';
+const EDGE_EXECUTABLE = 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe';
 
 type Fixtures = {
   context: BrowserContext;
@@ -29,7 +30,9 @@ export const test = base.extend<Fixtures>({
     const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vizion-e2e-'));
     const context = await chromium.launchPersistentContext(userDataDir, {
       headless: false,
-      executablePath: fs.existsSync(CHROMIUM_EXECUTABLE) ? CHROMIUM_EXECUTABLE : undefined,
+      executablePath: fs.existsSync(CHROMIUM_EXECUTABLE)
+        ? CHROMIUM_EXECUTABLE
+        : fs.existsSync(EDGE_EXECUTABLE) ? EDGE_EXECUTABLE : undefined,
       args: [
         `--disable-extensions-except=${EXTENSION_PATH}`,
         `--load-extension=${EXTENSION_PATH}`,
