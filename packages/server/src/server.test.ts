@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { WebSocket } from 'ws';
 import type { AgentEvent, AgentKind, AgentRunner, ServerMessage } from '@vizion/shared';
 import { createServer, OpLock } from './server.js';
@@ -1261,4 +1261,166 @@ describe('server screenshot handling', () => {
       await fs.rm(cwd, { recursive: true, force: true });
     }
   });
+});
+describe('server reconnect recovery', () => {
+  it('keeps an agent alive and recovers its output and rejectable diff on a new socket', async () => {
+    const cwd = await setupGitRepo();
+    let finish: (() => void) | undefined;
+    let signal: AbortSignal | undefined;
+    class ReconnectRunner implements AgentRunner {
+      readonly kind = 'claude' as const;
+      async isAvailable() { return true; }
+      async *run(_request: unknown, abortSignal: AbortSignal): AsyncIterable<AgentEvent> {
+        signal = abortSignal;
+        yield { type: 'started', agent: 'claude' };
+        await fs.writeFile(path.join(cwd, 'tracked.txt'), 'changed\n');
+        await new Promise<void>((resolve) => { finish = resolve; });
+        yield { type: 'text', text: 'finished while reconnecting' };
+        yield { type: 'done', exitCode: 0 };
+      }
+    }
+    const server = createServer({ port: 0, cwd, runners: [new ReconnectRunner()], token: TEST_TOKEN, allowedOriginPrefixes: [TEST_ORIGIN] });
+    await server.start();
+    const sockets: WebSocket[] = [];
+    async function connect(session: string) {
+      const ws = new WebSocket(`${wsUrl(server.port)}&session=${session}`, { headers: { Origin: TEST_ORIGIN } });
+      sockets.push(ws);
+      const reader = createMessageReader(ws);
+      await new Promise<void>((resolve, reject) => { ws.once('open', resolve); ws.once('error', reject); });
+      await reader.next(); // hello
+      await reader.next(); // history
+      return { ws, reader };
+    }
+    try {
+      const first = await connect('panel-a');
+      // Only reconnecting clients receive the recovery protocol.
+      const initial = await first.reader.next();
+      expect(initial).toMatchObject({ type: 'session', run: null });
+      first.ws.send(JSON.stringify({ type: 'run', agent: 'claude', prompt: 'change', element }));
+      expect(await first.reader.next()).toMatchObject({ type: 'event', event: { type: 'started' } });
+      // Wait until the runner has reached its pause, then close the real socket.
+      await vi.waitFor(() => expect(finish).toBeTypeOf('function'));
+      await new Promise<void>((resolve) => { first.ws.once('close', resolve); first.ws.close(); });
+      const second = await connect('panel-a');
+      expect(signal?.aborted).toBe(false);
+      expect(await second.reader.next()).toMatchObject({ type: 'session', run: { running: true, agent: 'claude' } });
+      finish?.();
+      expect(await second.reader.next()).toMatchObject({ type: 'event', event: { type: 'text' } });
+      expect(await second.reader.next()).toMatchObject({ type: 'event', event: { type: 'done' } });
+      expect(await second.reader.next()).toMatchObject({ type: 'diff', files: [{ path: 'tracked.txt' }] });
+      await new Promise<void>((resolve) => { second.ws.once('close', resolve); second.ws.close(); });
+      const third = await connect('panel-a');
+      expect(await third.reader.next()).toMatchObject({ type: 'session', run: { running: false, events: expect.arrayContaining([{ type: 'text', text: 'finished while reconnecting' }]) } });
+      const diff = await third.reader.next();
+      if (diff.type !== 'diff') throw new Error('expected recovered diff');
+      third.ws.send(JSON.stringify({ type: 'reject', runId: diff.runId }));
+      expect(await third.reader.next()).toMatchObject({ type: 'restored', files: ['tracked.txt'] });
+      expect(await fs.readFile(path.join(cwd, 'tracked.txt'), 'utf8')).toBe('original content\n');
+    } finally {
+      finish?.();
+      for (const socket of sockets) socket.close();
+      await server.stop();
+      await fs.rm(cwd, { recursive: true, force: true });
+    }
+  });
+});
+
+it('does not replay an overlay proposal that was dismissed before reconnecting', async () => {
+  const cwd = await setupGitRepo();
+  const server = createServer({
+    port: 0, cwd, token: TEST_TOKEN, allowedOriginPrefixes: [TEST_ORIGIN],
+    runners: [new OverlayRunner('[{"selector":"#btn","kind":"text","value":"Hello"}]')],
+  });
+  await server.start();
+  const sockets: WebSocket[] = [];
+  async function connect() {
+    const ws = new WebSocket(`${wsUrl(server.port)}&session=overlay-panel`, { headers: { Origin: TEST_ORIGIN } });
+    sockets.push(ws);
+    const reader = createMessageReader(ws);
+    await new Promise<void>((resolve, reject) => { ws.once('open', resolve); ws.once('error', reject); });
+    await reader.next();
+    await reader.next();
+    return { ws, reader };
+  }
+  try {
+    const first = await connect();
+    await first.reader.next();
+    first.ws.send(JSON.stringify({ type: 'run', agent: 'claude', prompt: 'change', element, mode: 'overlay' }));
+    let outcome: ServerMessage;
+    do { outcome = await first.reader.next(); } while (outcome.type !== 'overlay-proposal');
+    first.ws.send(JSON.stringify({ type: 'dismiss-proposal' }));
+    first.ws.send(JSON.stringify({ type: 'ping' }));
+    expect(await first.reader.next()).toEqual({ type: 'pong' });
+    await new Promise<void>((resolve) => { first.ws.once('close', resolve); first.ws.close(); });
+    const second = await connect();
+    expect(await second.reader.next()).toMatchObject({ type: 'session', run: { proposal: null, pageKey: 'https://example.com/' } });
+  } finally {
+    for (const socket of sockets) socket.close();
+    await server.stop();
+    await fs.rm(cwd, { recursive: true, force: true });
+  }
+});
+
+it('retains the project lock through the reconnect grace period and recovers an offline completion', async () => {
+  const cwd = await setupGitRepo();
+  let finish: (() => void) | undefined;
+  let signal: AbortSignal | undefined;
+  class PausedRunner implements AgentRunner {
+    readonly kind = 'claude' as const;
+    async isAvailable() { return true; }
+    async *run(_request: unknown, abortSignal: AbortSignal): AsyncIterable<AgentEvent> {
+      signal = abortSignal;
+      yield { type: 'started', agent: 'claude' };
+      await fs.writeFile(path.join(cwd, 'tracked.txt'), 'offline change\n');
+      await new Promise<void>((resolve) => { finish = resolve; });
+      yield { type: 'text', text: 'completed offline' };
+      yield { type: 'done', exitCode: 0 };
+    }
+  }
+  const server = createServer({ port: 0, cwd, token: TEST_TOKEN, allowedOriginPrefixes: [TEST_ORIGIN], runners: [new PausedRunner()] });
+  await server.start();
+  const sockets: WebSocket[] = [];
+  async function connect(session: string) {
+    const ws = new WebSocket(`${wsUrl(server.port)}&session=${session}`, { headers: { Origin: TEST_ORIGIN } });
+    sockets.push(ws);
+    const reader = createMessageReader(ws);
+    await new Promise<void>((resolve, reject) => { ws.once('open', resolve); ws.once('error', reject); });
+    await reader.next(); await reader.next();
+    return { ws, reader };
+  }
+  try {
+    const first = await connect('offline-panel');
+    await first.reader.next();
+    first.ws.send(JSON.stringify({ type: 'run', agent: 'claude', prompt: 'change', element }));
+    await first.reader.next();
+    await vi.waitFor(() => expect(finish).toBeTypeOf('function'));
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    await new Promise<void>((resolve) => { first.ws.once('close', resolve); first.ws.close(); });
+    await vi.advanceTimersByTimeAsync(59_999);
+    expect(signal?.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(signal?.aborted).toBe(true);
+    vi.useRealTimers();
+    const other = await connect('other-panel');
+    await other.reader.next();
+    other.ws.send(JSON.stringify({ type: 'run', agent: 'claude', prompt: 'other', element }));
+    expect(await other.reader.next()).toMatchObject({ type: 'error', message: 'Un run est déjà en cours.' });
+    finish?.();
+    // A real request acts as a barrier once the runner's final diff exists.
+    const resumed = await connect('offline-panel');
+    let recovery = await resumed.reader.next();
+    if (recovery.type !== 'session' || recovery.run?.running) {
+      let message: ServerMessage;
+      do { message = await resumed.reader.next(); } while (message.type !== 'diff');
+      await new Promise<void>((resolve) => { resumed.ws.once('close', resolve); resumed.ws.close(); });
+      recovery = await (await connect('offline-panel')).reader.next();
+    }
+    expect(recovery).toMatchObject({ type: 'session', run: { running: false, events: expect.arrayContaining([{ type: 'text', text: 'completed offline' }]) } });
+  } finally {
+    vi.useRealTimers();
+    finish?.();
+    for (const socket of sockets) socket.close();
+    await server.stop();
+    await fs.rm(cwd, { recursive: true, force: true });
+  }
 });

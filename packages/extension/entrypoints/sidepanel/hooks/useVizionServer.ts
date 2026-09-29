@@ -30,6 +30,13 @@ export function useVizionServer(settings: VizionSettings): VizionServerHandle {
   const wsRef = useRef<WebSocket | null>(null);
   const listenersRef = useRef(new Set<(msg: ServerMessage) => void>());
 
+  const [sessionId] = useState(() => {
+    const key = 'vizion:connection-session';
+    const id = sessionStorage.getItem(key) ?? crypto.randomUUID();
+    sessionStorage.setItem(key, id);
+    return id;
+  });
+
   useEffect(() => {
     let disposed = false;
     let backoff = MIN_BACKOFF_MS;
@@ -38,7 +45,7 @@ export function useVizionServer(settings: VizionSettings): VizionServerHandle {
     function connect(): void {
       if (disposed) return;
       setStatus((prev) => (prev === 'connected' ? prev : 'connecting'));
-      const url = `ws://127.0.0.1:${settings.port}/ws?token=${encodeURIComponent(settings.token)}`;
+      const url = `ws://127.0.0.1:${settings.port}/ws?token=${encodeURIComponent(settings.token)}&session=${encodeURIComponent(sessionId)}`;
       const ws = new WebSocket(url);
       wsRef.current = ws;
       const isCurrent = () => !disposed && wsRef.current === ws;
@@ -87,7 +94,7 @@ export function useVizionServer(settings: VizionSettings): VizionServerHandle {
       wsRef.current?.close();
       wsRef.current = null;
     };
-  }, [settings.port, settings.token]);
+  }, [settings.port, settings.token, sessionId]);
 
   const send = useCallback((msg: ClientMessage): boolean => {
     const ws = wsRef.current;

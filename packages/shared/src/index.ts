@@ -60,6 +60,17 @@ export interface RunRecord {
   status: 'accepted' | 'undone';
 }
 
+/** Current panel task, recovered after reconnecting to the same server session. */
+export interface SessionRun {
+  agent: AgentKind;
+  pageKey: string;
+  running: boolean;
+  events: AgentEvent[];
+  proposal: { overrides: OverrideProposal[]; note?: string; pageKey: string } | null;
+  error: string | null;
+  exitCode: number | null;
+}
+
 export type ClientMessage =
   | {
       type: 'run';
@@ -82,10 +93,12 @@ export type ClientMessage =
   | { type: 'retry-diff'; runId: string }
   | { type: 'undo-run'; id: string }
   | { type: 'list-history' }
+  | { type: 'dismiss-proposal' }
   | { type: 'ping' };
 
 export type ServerMessage =
   | { type: 'hello'; version: string; cwd: string; agents: AgentKind[] }
+  | { type: 'session'; run: SessionRun | null }
   | { type: 'event'; event: AgentEvent }
   | { type: 'diff'; runId: string; state: 'pending' | 'reject-only' | 'resolved'; files: FileDiff[] }
   | { type: 'restored'; files: string[] }

@@ -157,6 +157,14 @@ export function runReducer(state: RunState, action: RunAction): RunState {
     case 'server': {
       const message = action.message;
       switch (message.type) {
+        case 'session':
+          return {
+            ...state,
+            agent: null, events: [], running: false, pageKey: null,
+            proposal: null, proposalError: null, error: null, exitCode: null,
+            decision: null, diff: null, restoredFiles: null,
+            ...(message.run ?? {}),
+          };
         case 'event': {
           const event = message.event;
           const events = [...state.events, event];
