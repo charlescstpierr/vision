@@ -406,3 +406,19 @@ describe('runReducer annotations', () => {
     expect(runReducer(sent, { type: 'discard-staged-screenshot' })).toBe(sent);
   });
 });
+
+it('recovers task output without duplicating it or discarding staged annotations', () => {
+  const screenshot = { dataUrl: 'data:image/png;base64,test', width: 10, height: 10 };
+  const staged = runReducer(initialRunState, { type: 'set-screenshot', screenshot });
+  const message = {
+    type: 'session' as const,
+    run: { agent: 'claude' as const, pageKey: 'https://example.com/', running: true,
+      events: [{ type: 'text' as const, text: 'working' }], proposal: null, error: null, exitCode: null },
+  };
+  const recovered = runReducer(staged, { type: 'server', message });
+  expect(recovered).toMatchObject({ running: true, agent: 'claude', screenshot });
+  expect(runReducer(recovered, { type: 'server', message }).events).toHaveLength(1);
+  const restarted = runReducer(recovered, { type: 'server', message: { type: 'session', run: null } });
+  expect(restarted.running).toBe(false);
+  expect(restarted.events).toEqual([]);
+});

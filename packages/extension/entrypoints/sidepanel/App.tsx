@@ -59,7 +59,7 @@ export default function App() {
   const captureEpochRef = useRef(0);
   const selectionKey = elements.map((el) => el.selector).join('|');
 
-  useEffect(() => server.subscribe((message) => dispatch({ type: 'server', message })), [server]);
+  useEffect(() => server.subscribe((message) => dispatch({ type: 'server', message })), [server.subscribe]);
 
   // Load the persisted "Joindre une capture" preference once on mount.
   useEffect(() => {
@@ -260,6 +260,7 @@ export default function App() {
       // the run started — not the tab that happens to be active now.
       await addOverrides(run.proposal.pageKey, overrides);
       setNotice(`${overrides.length} override(s) appliqué(s)`);
+      server.send({ type: 'dismiss-proposal' });
       dispatch({ type: 'clear-proposal' });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -268,6 +269,7 @@ export default function App() {
   };
 
   const ignoreProposal = () => {
+    server.send({ type: 'dismiss-proposal' });
     dispatch({ type: 'clear-proposal' });
   };
 
